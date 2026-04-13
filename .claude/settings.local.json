@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(git:*)",
+      "Bash(gh repo:*)",
+      "Bash(ls:*)",
+      "Bash(wc:*)",
+      "Bash(.venv/Scripts/python.exe:*)",
+      "Bash(D:/phpstudy_pro/Extensions/redis3.0.504/redis-cli.exe ping:*)",
+      "Bash(D:/phpstudy_pro/Extensions/redis3.0.504/redis-cli.exe INFO server)",
+      "Bash(pip list:*)"
+    ]
+  }
+}

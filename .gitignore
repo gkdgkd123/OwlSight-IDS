@@ -1,0 +1,210 @@
+# ============================================================================
+# 环境变量和敏感信息（最重要！）
+# ============================================================================
+.env
+.env.local
+.env.*.local
+.env.example
+*.key
+*.pem
+credentials.json
+secrets.json
+api_keys.json
+config.local.py
+
+# ============================================================================
+# Python 虚拟环境
+# ============================================================================
+venv/
+env/
+ENV/
+.venv
+.env.venv
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ============================================================================
+# Python 缓存和编译文件
+# ============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+*.pyc
+*.pyo
+
+# ============================================================================
+# 测试和覆盖率
+# ============================================================================
+.pytest_cache/
+.pytest_cache
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.hypothesis/
+*.cover
+test_results.txt
+test_output/
+test_results/
+
+# ============================================================================
+# IDE 和编辑器
+# ============================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.AppleDouble
+.LSOverride
+*.sublime-project
+*.sublime-workspace
+.project
+.pydevproject
+.settings/
+*.iml
+.classpath
+
+# ============================================================================
+# 操作系统文件
+# ============================================================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ============================================================================
+# 机器学习模型和大型数据文件
+# ============================================================================
+*.pkl
+*.joblib
+*.h5
+*.pt
+*.pth
+*.onnx
+*.model
+*.bin
+*.safetensors
+data/MachineLearningCVE/
+*.pcap
+*.pcapng
+*.csv
+!.env.example
+!requirements.txt
+
+# ============================================================================
+# Redis 和数据库
+# ============================================================================
+dump.rdb
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# ============================================================================
+# 临时文件
+# ============================================================================
+*.tmp
+*.temp
+*.bak
+*.backup
+*.swp
+*~
+.#*
+
+# ============================================================================
+# 系统生成的文件
+# ============================================================================
+.vscode/settings.json
+.vscode/launch.json
+.vscode/extensions.json
+.history/
+.ionide/
+
+# ============================================================================
+# 项目特定的忽略规则（OwlSight-IDS）
+# ============================================================================
+# 本地测试输出
+test_output/
+test_results/
+logs/
+*.log
+
+# 模型训练输出
+models/checkpoints/
+models/logs/
+training_output/
+
+# 数据集（保留示例）
+data/raw/
+data/processed/
+data/test_processed.csv
+!data/test.pcap
+!data/eve.json
+
+# 临时脚本
+scripts/temp/
+scripts/debug/
+
+# ============================================================================
+# OwlSight-IDS 特定规则
+# ============================================================================
+# Redis 持久化文件
+*.rdb
+*.aof
+
+# Suricata 日志
+/var/log/suricata/
+
+# 模型文件（太大，不提交）
+realtime_ids/models/*.json
+realtime_ids/models/*.pkl
+realtime_ids/models/*.bin
+realtime_ids/models/vector_db/
+!realtime_ids/models/.gitkeep
+
+# 测试生成的临时文件
+tests/test_processed.csv
+tests/test_output/
+
+# 虚拟环境和依赖
+.venv/
+venv/
+env/
+ENV/
+
+# ============================================================================
+# 大型文件和二进制文件
+# ============================================================================
+*.zip
+*.tar.gz
+*.rar
+*.7z
+*.iso
+*.dmg
+

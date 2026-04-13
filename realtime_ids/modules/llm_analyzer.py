@@ -1,0 +1,673 @@
+"""
+Module 4: LLM 深度研判模块（异步消费者 Worker）
+功能：从 Redis 队列消费任务，调用 LLM API 进行深度研判，支持速率控制和失败重试
+
+改造要点：
+  - BRPOP 阻塞消费 llm_task_queue
+  - 速率控制（避免 API 限流）
+  - 失败重试机制
+  - 队列积压监控
+  - 优雅停机
+"""
+import json
+import redis
+import os
+import time
+import signal
+import threading
+from typing import Dict, Any, Optional
+from pathlib import Path
+from ..utils import sanitize_text, setup_logger
+from ..config.config import RedisConfig, LLMConfig
+
+
+class LLMAnalyzer:
+    """LLM 深度研判模块 - 异步消费者 Worker"""
+
+    def __init__(self, redis_config: RedisConfig, llm_config: LLMConfig):
+        self.redis_config = redis_config
+        self.llm_config = llm_config
+        self.logger = setup_logger("LLMAnalyzer")
+
+        self.redis_client = redis.Redis(
+            host=redis_config.host,
+            port=redis_config.port,
+            db=redis_config.db,
+            password=redis_config.password,
+            decode_responses=True
+        )
+
+        self.running = False
+        self.llm_queue_name = "llm_task_queue"
+        self.failed_queue_name = "llm_failed_queue"
+
+        # 速率控制（避免 API 限流）
+        self.rate_limit_requests = 10  # 每分钟最多 10 次请求
+        self.rate_limit_window = 60.0  # 60 秒窗口
+        self.request_timestamps = []  # 请求时间戳列表
+        self.rate_lock = threading.Lock()
+
+        # 统计计数器
+        self.stats_lock = threading.Lock()
+        self.stats = {
+            'total_processed': 0,
+            'success': 0,
+            'failed': 0,
+            'malicious_detected': 0,
+            'benign_detected': 0
+        }
+
+        # 优雅停机信号
+        self.shutdown_event = threading.Event()
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
+
+        # 根据配置选择使用 API 或本地模型
+        if llm_config.use_api:
+            self.logger.info(f"LLM 深度研判模块初始化完成（API 模式 - 异步消费者）")
+            self.logger.info(f"  API 地址: {llm_config.api_base_url}")
+            self.logger.info(f"  模型: {llm_config.api_model}")
+            self.logger.info(f"  速率限制: {self.rate_limit_requests} 请求/分钟")
+            self.logger.info(f"  消费队列: {self.llm_queue_name}")
+            self.openai_client = self._init_openai_client()
+        else:
+            self.logger.info("LLM 深度研判模块初始化完成（本地模型模式）")
+            self.tokenizer = None
+            self.model = None
+            self.vector_store = None
+            self._load_local_model()
+            if llm_config.use_rag:
+                self._load_vector_store()
+
+    def _signal_handler(self, signum, frame):
+        """处理停机信号"""
+        self.logger.info(f"收到停机信号 {signum}，准备优雅停机...")
+        self.shutdown_event.set()
+        self.running = False
+
+    def _wait_for_rate_limit(self):
+        """速率控制：等待直到可以发送请求"""
+        with self.rate_lock:
+            current_time = time.time()
+
+            # 清理过期的时间戳（超过窗口时间）
+            self.request_timestamps = [
+                ts for ts in self.request_timestamps
+                if current_time - ts < self.rate_limit_window
+            ]
+
+            # 如果达到速率限制，等待
+            if len(self.request_timestamps) >= self.rate_limit_requests:
+                oldest_ts = self.request_timestamps[0]
+                wait_time = self.rate_limit_window - (current_time - oldest_ts)
+                if wait_time > 0:
+                    self.logger.warning(
+                        f"达到速率限制 ({self.rate_limit_requests} 请求/分钟)，等待 {wait_time:.1f}s"
+                    )
+                    time.sleep(wait_time)
+                    # 重新清理时间戳
+                    current_time = time.time()
+                    self.request_timestamps = [
+                        ts for ts in self.request_timestamps
+                        if current_time - ts < self.rate_limit_window
+                    ]
+
+            # 记录本次请求时间戳
+            self.request_timestamps.append(time.time())
+
+    def _check_queue_health(self):
+        """检查队列健康状态"""
+        try:
+            queue_len = self.redis_client.llen(self.llm_queue_name)
+            failed_len = self.redis_client.llen(self.failed_queue_name)
+
+            if queue_len > 100:
+                self.logger.warning(f"[QUEUE-ALERT] 任务队列积压严重: {queue_len} 个待处理任务")
+            elif queue_len > 50:
+                self.logger.warning(f"[QUEUE-ALERT] 任务队列积压: {queue_len} 个待处理任务")
+
+            if failed_len > 10:
+                self.logger.error(f"[QUEUE-ALERT] 失败队列积压: {failed_len} 个失败任务")
+
+            return queue_len, failed_len
+        except Exception as e:
+            self.logger.error(f"检查队列健康状态失败: {e}")
+            return 0, 0
+        """初始化 API 配置（使用 requests）"""
+        if not self.llm_config.api_key:
+            self.logger.error("API Key 未设置，请设置环境变量 LLM_API_KEY")
+            return None
+
+        self.logger.info("API 配置初始化成功")
+        return True  # 返回 True 表示配置成功
+
+    def _load_local_model(self):
+        """加载本地 Qwen 模型"""
+        try:
+            from transformers import AutoTokenizer, AutoModelForCausalLM
+            import torch
+
+            model_path = self.llm_config.model_path
+            if not Path(model_path).exists():
+                self.logger.warning(f"模型路径不存在: {model_path}，将使用 Dummy 模式")
+                return
+
+            self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_path,
+                torch_dtype=torch.float16,
+                device_map="auto",
+                trust_remote_code=True
+            )
+            self.logger.info(f"Qwen 模型加载成功: {model_path}")
+        except Exception as e:
+            self.logger.error(f"加载 Qwen 模型失败: {e}")
+            self.model = None
+
+    def _load_vector_store(self):
+        """加载向量库（仅本地模式）"""
+        try:
+            from langchain_community.vectorstores import Chroma
+            from langchain_community.embeddings import HuggingFaceEmbeddings
+
+            vector_db_path = self.llm_config.vector_db_path
+            if not Path(vector_db_path).exists():
+                self.logger.warning(f"向量库路径不存在: {vector_db_path}")
+                return
+
+            embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+            self.vector_store = Chroma(
+                persist_directory=vector_db_path,
+                embedding_function=embeddings
+            )
+            self.logger.info(f"向量库加载成功: {vector_db_path}")
+        except Exception as e:
+            self.logger.error(f"加载向量库失败: {e}")
+            self.vector_store = None
+
+    def _sanitize_features(self, features_json: str) -> Dict[str, Any]:
+        """清洗特征数据"""
+        try:
+            features = json.loads(features_json)
+            sanitized = {}
+            for key, value in features.items():
+                if isinstance(value, (int, float)):
+                    sanitized[key] = value
+                elif isinstance(value, str):
+                    sanitized[key] = sanitize_text(value, max_length=200)
+            return sanitized
+        except Exception as e:
+            self.logger.error(f"特征清洗失败: {e}")
+            return {}
+
+    def _features_to_natural_language(self, features: Dict[str, Any]) -> str:
+        """将特征转换为自然语言描述"""
+        descriptions = []
+
+        # IAT 特征分析
+        iat_mean = features.get("iat_mean", 0)
+        iat_std = features.get("iat_std", 0)
+
+        if iat_mean < 0.01:
+            descriptions.append(f"数据包到达时间间隔极短（平均 {iat_mean*1000:.2f}ms），疑似快速扫描或自动化攻击")
+        elif iat_mean > 5.0:
+            descriptions.append(f"数据包到达时间间隔很长（平均 {iat_mean:.2f}s），可能是慢速扫描或人工操作")
+
+        if iat_std < 0.001 and features.get("packet_count", 0) > 5:
+            descriptions.append(f"包间隔标准差极小（{iat_std*1000:.3f}ms），行为极度规律，疑似机器定时通信")
+
+        # 包长特征分析
+        pkt_len_mean = features.get("pkt_len_mean", 0)
+        pkt_len_std = features.get("pkt_len_std", 0)
+
+        if pkt_len_mean < 100:
+            descriptions.append(f"平均包长很小（{pkt_len_mean:.1f} bytes），可能是探测流量或控制流量")
+        elif pkt_len_mean > 1000:
+            descriptions.append(f"平均包长较大（{pkt_len_mean:.1f} bytes），可能包含大量数据传输")
+
+        # 流量规模分析
+        bytes_sent = features.get("bytes_sent", 0)
+        packet_count = features.get("packet_count", 0)
+        duration = features.get("duration", 0)
+
+        if bytes_sent > 50000:
+            descriptions.append(f"总传输字节数较大（{bytes_sent/1024:.1f} KB），可能存在数据外泄风险")
+
+        if packet_count > 0:
+            descriptions.append(f"在早期阶段捕获到 {packet_count} 个数据包，持续时间 {duration:.2f} 秒")
+
+        # TCP 特征分析
+        syn_count = features.get("syn_count", 0)
+        if syn_count > 5 and syn_count == packet_count:
+            descriptions.append(f"全部为 SYN 包（{syn_count} 个），典型的端口扫描特征")
+
+        # 速率特征分析
+        packets_per_second = features.get("packets_per_second", 0)
+        if packets_per_second > 100:
+            descriptions.append(f"包速率很高（{packets_per_second:.1f} 包/秒），可能是 DoS 攻击")
+
+        return "；".join(descriptions) if descriptions else "流量特征正常"
+
+    def _build_prompt(self, features_text: str, xgb_score: float, anomaly_score: float, decision_type: str) -> str:
+        """构建 LLM Prompt"""
+
+        # 根据决策类型调整 Prompt
+        if decision_type == "ZERODAY_HUNT":
+            context = f"""
+【检测背景】
+本系统采用双模型协同检测架构：
+- XGBoost（监督学习）：基于已知攻击模式训练，得分 {xgb_score:.3f}（< 0.5 认为安全）
+- Isolation Forest（无监督学习）：基于统计异常检测，得分 {anomaly_score:.3f}（> 0.75 极度异常）
+
+【关键发现】
+XGBoost 认为该流量安全，但 Isolation Forest 检测到极度异常的行为模式。
+这种矛盾表明：该流量可能是**未知变种攻击或 0day 威胁**，其行为模式不在已知攻击训练集中，但统计特征显著偏离正常流量。
+"""
+        else:
+            context = f"""
+【检测背景】
+本系统采用双模型协同检测架构：
+- XGBoost 得分: {xgb_score:.3f}（0.5-0.9 灰色地带，需要深度研判）
+- Isolation Forest 得分: {anomaly_score:.3f}（异常程度）
+
+【关键发现】
+该流量处于灰色地带，既不是明显的恶意流量，也不是完全正常的流量，需要结合语义特征进行深度分析。
+"""
+
+        prompt = f"""你是一个专业的网络安全分析专家，擅长识别网络攻击和异常行为。
+
+{context}
+
+【流量特征分析】
+{features_text}
+
+【任务要求】
+请基于以上信息，综合判断该网络流是否为恶意攻击。
+
+分析要点：
+1. 结合 XGBoost 和 Isolation Forest 的得分，评估威胁等级
+2. 分析流量特征的异常程度和攻击指标
+3. 判断是否为已知攻击类型，或可能是未知变种
+4. 评估攻击意图和潜在危害
+
+请以严格的 JSON 格式输出，包含以下字段：
+{{
+  "is_malicious": true/false,
+  "attack_type": "攻击类型（如：Port Scanning, DoS Attack, Data Exfiltration, Slow Scan, Unknown/0day, Benign Traffic）",
+  "confidence": 0.0-1.0,
+  "reason": "详细分析过程（2-3 句话，说明判断依据）",
+  "threat_level": "威胁等级（Critical/High/Medium/Low/None）",
+  "recommended_action": "建议措施（Block/Monitor/Allow）"
+}}
+
+JSON 输出："""
+
+        return prompt
+
+    def _call_llm_api(self, prompt: str) -> Dict[str, Any]:
+        """调用 LLM API（使用 requests，带速率控制）"""
+        if not self.openai_client:
+            return self._dummy_result("API 配置未初始化")
+
+        try:
+            import requests
+
+            # 速率控制
+            self._wait_for_rate_limit()
+
+            self.logger.info(f"调用 LLM API: {self.llm_config.api_model}")
+
+            # 构建请求
+            url = f"{self.llm_config.api_base_url}/chat/completions"
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.llm_config.api_key}"
+            }
+
+            payload = {
+                "model": self.llm_config.api_model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "你是一个专业的网络安全分析专家。请严格按照 JSON 格式输出分析结果。"
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                "temperature": 0.3,
+                "max_tokens": 1024
+            }
+
+            # 发送请求
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            response.raise_for_status()
+
+            # 解析响应
+            response_data = response.json()
+            content = response_data["choices"][0]["message"]["content"]
+
+            self.logger.info(f"LLM API 响应成功，长度: {len(content)}")
+
+            # 解析 JSON
+            json_start = content.find("{")
+            json_end = content.rfind("}") + 1
+
+            if json_start != -1 and json_end > json_start:
+                json_str = content[json_start:json_end]
+                result = json.loads(json_str)
+                return result
+            else:
+                self.logger.warning("LLM 输出未包含有效 JSON")
+                return self._dummy_result("LLM 输出格式错误")
+
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"LLM API 请求失败: {e}")
+            raise  # 抛出异常以便重试逻辑处理
+        except Exception as e:
+            self.logger.error(f"LLM API 调用失败: {e}")
+            raise
+
+    def _call_local_llm(self, prompt: str) -> Dict[str, Any]:
+        """调用本地 LLM 模型"""
+        if not self.model or not self.tokenizer:
+            return self._dummy_result("本地模型未加载")
+
+        try:
+            inputs = self.tokenizer(prompt, return_tensors="pt", max_length=self.llm_config.max_length, truncation=True)
+            inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+
+            outputs = self.model.generate(
+                **inputs,
+                max_new_tokens=512,
+                temperature=0.3,
+                do_sample=True
+            )
+
+            response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+            # 解析 JSON
+            json_start = response.find("{")
+            json_end = response.rfind("}") + 1
+
+            if json_start != -1 and json_end > json_start:
+                json_str = response[json_start:json_end]
+                result = json.loads(json_str)
+                return result
+            else:
+                self.logger.warning("本地 LLM 输出未包含有效 JSON")
+                return self._dummy_result("本地模型输出格式错误")
+
+        except Exception as e:
+            self.logger.error(f"本地 LLM 推理失败: {e}")
+            return self._dummy_result(f"本地推理异常: {str(e)}")
+
+    def _dummy_result(self, reason: str) -> Dict[str, Any]:
+        """返回 Dummy 结果"""
+        return {
+            "is_malicious": False,
+            "attack_type": "Unknown",
+            "confidence": 0.5,
+            "reason": reason,
+            "threat_level": "Unknown",
+            "recommended_action": "Monitor"
+        }
+
+    def _process_task(self, task_data: Dict[str, Any]) -> bool:
+        """处理单个任务，返回是否成功"""
+        flow_key = task_data.get("flow_key")
+        decision = task_data.get("decision")
+
+        try:
+            self.logger.info(f"[WORKER] 开始处理任务 | Flow: {flow_key} | Decision: {decision}")
+
+            # 提取特征
+            features_json = task_data.get("features", "{}")
+            features = self._sanitize_features(features_json)
+
+            # 提取双模型得分
+            xgb_score = task_data.get("xgb_score", 0.0)
+            anomaly_score = task_data.get("anomaly_score", 0.0)
+
+            # 转换为自然语言
+            features_text = self._features_to_natural_language(features)
+
+            # 构建 Prompt
+            prompt = self._build_prompt(features_text, xgb_score, anomaly_score, decision)
+
+            # 调用 LLM
+            if self.llm_config.use_api:
+                result = self._call_llm_api(prompt)
+            else:
+                result = self._call_local_llm(prompt)
+
+            # 记录日志
+            self.logger.info(
+                f"[LLM] 深度研判完成 {flow_key} | "
+                f"决策类型: {decision} | "
+                f"恶意: {result.get('is_malicious')} | "
+                f"类型: {result.get('attack_type')} | "
+                f"置信度: {result.get('confidence', 0):.2f} | "
+                f"威胁等级: {result.get('threat_level')} | "
+                f"建议: {result.get('recommended_action')}"
+            )
+
+            # 写入 Redis
+            try:
+                self.redis_client.hset(flow_key, "llm_result", json.dumps(result, ensure_ascii=False))
+                self.redis_client.hset(flow_key, "llm_is_malicious", str(result.get("is_malicious", False)))
+                self.redis_client.hset(flow_key, "llm_confidence", str(result.get("confidence", 0.0)))
+                self.redis_client.hset(flow_key, "llm_attack_type", result.get("attack_type", "Unknown"))
+                self.redis_client.hset(flow_key, "llm_threat_level", result.get("threat_level", "Unknown"))
+            except Exception as e:
+                self.logger.error(f"写入 LLM 结果到 Redis 失败: {e}")
+                raise
+
+            # 更新统计
+            with self.stats_lock:
+                self.stats['total_processed'] += 1
+                self.stats['success'] += 1
+                if result.get('is_malicious'):
+                    self.stats['malicious_detected'] += 1
+                else:
+                    self.stats['benign_detected'] += 1
+
+            return True
+
+        except Exception as e:
+            self.logger.error(f"处理任务失败 {flow_key}: {e}")
+            with self.stats_lock:
+                self.stats['total_processed'] += 1
+                self.stats['failed'] += 1
+            return False
+
+    def _retry_failed_task(self, task_json: str, max_retries: int = 3):
+        """重试失败的任务"""
+        task_data = json.loads(task_json)
+        retry_count = task_data.get("retry_count", 0)
+
+        if retry_count >= max_retries:
+            self.logger.error(f"任务重试次数超限 ({max_retries})，放弃处理: {task_data.get('flow_key')}")
+            # 移到失败队列
+            self.redis_client.lpush(self.failed_queue_name, task_json)
+            return
+
+        # 增加重试计数
+        task_data["retry_count"] = retry_count + 1
+        task_data["last_error_time"] = time.time()
+
+        # 重新入队（放到队列尾部）
+        self.redis_client.rpush(self.llm_queue_name, json.dumps(task_data))
+        self.logger.warning(f"任务重新入队 (重试 {retry_count + 1}/{max_retries}): {task_data.get('flow_key')}")
+
+    def start(self):
+        """启动消费者 Worker"""
+        self.running = True
+        self.logger.info("LLM 消费者 Worker 启动")
+
+        last_health_check = time.time()
+        health_check_interval = 30.0  # 每 30 秒检查一次队列健康
+
+        try:
+            while self.running and not self.shutdown_event.is_set():
+                # 定期健康检查
+                current_time = time.time()
+                if current_time - last_health_check >= health_check_interval:
+                    self._check_queue_health()
+                    self._print_stats()
+                    last_health_check = current_time
+
+                # BRPOP 阻塞消费（超时 1 秒，避免无法响应停机信号）
+                result = self.redis_client.brpop(self.llm_queue_name, timeout=1)
+
+                if result is None:
+                    continue  # 超时，继续循环
+
+                queue_name, task_json = result
+                task_data = json.loads(task_json)
+
+                # 处理任务
+                success = self._process_task(task_data)
+
+                # 失败则重试
+                if not success:
+                    self._retry_failed_task(task_json)
+
+        except KeyboardInterrupt:
+            self.logger.info("收到中断信号，停止消费者")
+        finally:
+            self.stop()
+
+    def stop(self):
+        """停止消费者 Worker"""
+        self.running = False
+        self._print_stats()
+        self.logger.info("LLM 消费者 Worker 停止")
+
+    def _print_stats(self):
+        """打印统计信息"""
+        with self.stats_lock:
+            if self.stats['total_processed'] > 0:
+                success_rate = self.stats['success'] / self.stats['total_processed'] * 100
+                self.logger.info(
+                    f"[STATS] 累计处理: {self.stats['total_processed']} | "
+                    f"成功: {self.stats['success']} ({success_rate:.1f}%) | "
+                    f"失败: {self.stats['failed']} | "
+                    f"检出恶意: {self.stats['malicious_detected']} | "
+                    f"检出正常: {self.stats['benign_detected']}"
+                )
+
+
+if __name__ == "__main__":
+    import sys
+    import time
+    from ..utils import generate_five_tuple_key
+
+    # 检查 API Key
+    api_key = os.getenv("LLM_API_KEY")
+    if not api_key:
+        print("[ERROR] 环境变量 LLM_API_KEY 未设置")
+        print("请先设置环境变量后再测试 LLM 消费者")
+        print("\n示例: export LLM_API_KEY=your_api_key")
+        sys.exit(1)
+
+    print(f"[OK] 检测到 API Key: {api_key[:10]}...")
+
+    # 测试配置
+    redis_cfg = RedisConfig(host="localhost", port=6379)
+    llm_cfg = LLMConfig(
+        use_api=True,
+        api_base_url="https://new.timefiles.online/v1",
+        api_key=api_key,
+        api_model="claude-opus-4-6"
+    )
+
+    analyzer = LLMAnalyzer(redis_cfg, llm_cfg)
+
+    print("=" * 60)
+    print("测试 1: 模拟向队列发送任务")
+    print("=" * 60)
+
+    # 模拟 Module 3 发送的任务
+    test_tasks = [
+        {
+            "flow_key": generate_five_tuple_key("192.168.1.30", 9012, "10.0.0.3", 8080, "TCP"),
+            "decision": "ZERODAY_HUNT",
+            "timestamp": time.time(),
+            "xgb_score": 0.35,
+            "anomaly_score": 0.88,
+            "packet_count": 10,
+            "features": json.dumps({
+                "iat_mean": 0.005,
+                "iat_std": 0.001,
+                "pkt_len_mean": 64,
+                "pkt_len_std": 10,
+                "bytes_sent": 640,
+                "packet_count": 10,
+                "duration": 0.05,
+                "syn_count": 10,
+                "packets_per_second": 200
+            }),
+            "suricata_alert": False,
+            "signature": "",
+            "severity": 0
+        },
+        {
+            "flow_key": generate_five_tuple_key("192.168.1.40", 3456, "10.0.0.4", 22, "TCP"),
+            "decision": "LLM_ANALYZE",
+            "timestamp": time.time(),
+            "xgb_score": 0.7,
+            "anomaly_score": 0.5,
+            "packet_count": 15,
+            "features": json.dumps({
+                "iat_mean": 0.1,
+                "iat_std": 0.05,
+                "pkt_len_mean": 512,
+                "pkt_len_std": 100,
+                "bytes_sent": 7680,
+                "packet_count": 15,
+                "duration": 1.5,
+                "syn_count": 1,
+                "packets_per_second": 10
+            }),
+            "suricata_alert": False,
+            "signature": "",
+            "severity": 0
+        }
+    ]
+
+    for task in test_tasks:
+        analyzer.redis_client.lpush(analyzer.llm_queue_name, json.dumps(task))
+        print(f"发送任务: {task['flow_key']} | Decision: {task['decision']}")
+
+    print(f"\n队列长度: {analyzer.redis_client.llen(analyzer.llm_queue_name)}")
+
+    print("\n" + "=" * 60)
+    print("测试 2: 启动消费者处理任务（按 Ctrl+C 停止）")
+    print("=" * 60)
+
+    try:
+        analyzer.start()
+    except KeyboardInterrupt:
+        print("\n测试结束")
+
+    print("\n" + "=" * 60)
+    print("检查处理结果:")
+    print("=" * 60)
+    for task in test_tasks:
+        flow_key = task['flow_key']
+        result = analyzer.redis_client.hget(flow_key, "llm_result")
+        is_malicious = analyzer.redis_client.hget(flow_key, "llm_is_malicious")
+        attack_type = analyzer.redis_client.hget(flow_key, "llm_attack_type")
+
+        print(f"\nFlow: {flow_key}")
+        print(f"  Decision: {task['decision']}")
+        print(f"  LLM 判定恶意: {is_malicious}")
+        print(f"  攻击类型: {attack_type}")
+        if result:
+            result_obj = json.loads(result)
+            print(f"  置信度: {result_obj.get('confidence', 0):.2f}")
+            print(f"  威胁等级: {result_obj.get('threat_level')}")
+            print(f"  建议措施: {result_obj.get('recommended_action')}")
+
