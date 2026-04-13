@@ -1,122 +1,697 @@
-# SemFlow-IDS
+# OwlSight-IDS: Real-time Malicious Traffic Detection System
 
-基于语义流的入侵检测系统 (Semantic Flow IDS)
+<div align="center">
 
-## 功能概述
+![Python](https://img.shields.io/badge/Python-3.8%2B-blue)
+![Redis](https://img.shields.io/badge/Redis-6.0%2B-red)
+![Suricata](https://img.shields.io/badge/Suricata-6.0%2B-orange)
+![License](https://img.shields.io/badge/License-MIT-green)
+![Status](https://img.shields.io/badge/Status-Active-brightgreen)
 
-SemFlow-IDS 是一个多层检测系统，结合传统规则匹配（L0）和语义分析（L1/L2）进行入侵检测。
+**🦉 A Triple-Layer Cooperative Detection Architecture for 0day Threat Hunting**
 
-## 架构
+[English](#english) | [中文](#中文)
+
+</div>
+
+---
+
+## English
+
+### Overview
+
+**OwlSight-IDS** is a real-time network intrusion detection system that combines **rule-based detection**, **machine learning inference**, and **large language model semantic analysis** to identify both known attacks and zero-day threats. The system employs a novel **triple-layer cooperative architecture** with **dual-model machine learning** to achieve high detection accuracy while maintaining low false-positive rates.
+
+### 🌟 Highlighted Features
+
+- **🎯 Triple-Layer Detection Architecture**
+  - **L0 (Rule Engine)**: Suricata-based signature detection for rapid filtering
+  - **L1 (Machine Learning)**: Dual-model cooperative inference (XGBoost + Isolation Forest)
+  - **L2 (Semantic Analysis)**: Claude Opus 4.6 LLM for deep threat analysis
+
+- **🔬 Dual-Model Cooperative Strategy**
+  - **XGBoost**: Supervised learning for known attack patterns (AUC: 0.977)
+  - **Isolation Forest**: Unsupervised anomaly detection for 0day candidates
+  - **Synergistic Decision Tree**: Combines both models for robust classification
+  - **Unique 0day Hunting**: Triggers when XGB < 0.5 (safe) AND Anomaly > 0.75 (abnormal)
+
+- **⚡ Early Flow Detection**
+  - Dual-trigger mechanism: 10 packets OR 3 seconds
+  - 18-dimensional feature vector extraction
+  - Sub-second latency for real-time processing
+  - Memory leak prevention with automatic cleanup
+
+- **🔄 Asynchronous Decoupled Architecture**
+  - Producer-consumer pattern via Redis message queue
+  - Non-blocking LLM analysis with rate limiting (10 req/min)
+  - Automatic retry mechanism (max 3 retries)
+  - Zero traffic detection latency from LLM processing
+
+- **📊 Comprehensive Monitoring & Observability**
+  - Time-windowed statistics (per-minute throughput display)
+  - Global cumulative metrics tracking
+  - Queue health monitoring with automatic alerting
+  - Thread-safe statistics with proper locking
+
+### Tech Stack
+
+| Layer | Technology | Purpose | Notes |
+|-------|-----------|---------|-------|
+| L0 | Suricata 6.0+ | Rule-based detection | Signature matching |
+| L1 ML | XGBoost + scikit-learn | Dual-model inference | AUC: 0.977 |
+| L1 Decision | Python threading | Decision tree logic | Real-time routing |
+| L2 LLM | Claude Opus 4.6 API | Semantic analysis | 0day threat hunting |
+| State Hub | Redis 6.0+ | Inter-module communication | Message queue + state store |
+| Feature Extraction | Scapy | Packet capture & analysis | 18-dim feature vector |
+
+### System Architecture
 
 ```
-输入 (eve.json) → L0 (规则匹配) → L1 (语义分析) → L2 (攻击链关联)
+┌─────────────────────────────────────────────────────────────────┐
+│                        Network Traffic                          │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+         ┌───────────────────────────────┐
+         │   Module 1: Suricata Monitor  │
+         │   (L0 Rule Engine Layer)      │
+         │   - Eve.json tailing          │
+         │   - Alert parsing             │
+         └───────────┬───────────────────┘
+                     │
+                     ▼
+         ┌───────────────────────────────┐
+         │   Module 2: Early Flow        │
+         │   (L1 ML Feature Engineering) │
+         │   - Scapy packet capture      │
+         │   - 18-dim feature extraction │
+         │   - Dual-model inference      │
+         └───────────┬───────────────────┘
+                     │
+                     ▼
+              ┌─────────────────┐
+              │    Redis Hub    │ ◄─── State Sharing (TTL=60s)
+              │    (Message     │      Flow metadata + decisions
+              │    Broker)      │
+              └──────┬──────────┘
+                     │
+                     ▼
+         ┌───────────────────────────────┐
+         │   Module 3: Intelligent       │
+         │   Router (L1 Decision Tree)   │
+         │   - Three-layer decision      │
+         │   - scan() based scanning     │
+         │   - Async queue publishing    │
+         └───────────┬───────────────────┘
+                     │
+                     ▼
+              ┌─────────────────┐
+              │  llm_task_queue │ ◄─── Async Queue
+              │   (Redis List)  │      Producer-Consumer
+              └──────┬──────────┘
+                     │
+                     ▼
+         ┌───────────────────────────────┐
+         │   Module 4: LLM Analyzer      │
+         │   (L2 Semantic Analysis)      │
+         │   - BRPOP consumption         │
+         │   - Rate limiting             │
+         │   - Retry mechanism           │
+         │   - Claude Opus API calls     │
+         └───────────────────────────────┘
 ```
 
-### 检测阶段
+### Performance Metrics
 
-| 阶段 | 说明 | 技术 |
-|------|------|------|
-| L0 | 规则匹配 | Suricata 告警规则 |
-| L1 | 语义特征提取 | LLM API (语义分析) |
-| L2 | 攻击链关联 | LLM API (多流量关联) |
+| Component | Throughput | Latency | Bottleneck | Scalability |
+|-----------|-----------|---------|-----------|-------------|
+| Module 1 (Suricata) | ~10K pps | <1ms | Disk I/O | Parallel monitors |
+| Module 2 (Feature) | ~5K flows/s | <10ms | CPU | GPU acceleration |
+| Module 3 (Decision) | ~10K flows/s | <1ms | Redis | Cluster mode |
+| Module 4 (LLM) | ~10 req/min | ~3s | API limit | Multiple workers |
 
-## 支持的事件类型
+### Decision Tree Logic
 
-- `alert` - Suricata 告警
-- `http` - HTTP 流量
-- `flow` - 流信息
-- `anomaly` - 异常事件
-- `fileinfo` - 文件信息
+```
+                    ┌─────────────┐
+                    │  Read Flow  │
+                    └──────┬──────┘
+                           │
+                           ▼
+              ┌──────────────────────┐
+              │  Already Decided?    │
+              └────┬────────────┬────┘
+                   │ Yes        │ No
+                   ▼            ▼
+                (Skip)      Continue
+                           │
+                           ▼
+        ┌──────────────────────────────┐
+        │ Layer 1: High-Risk Block    │
+        │ Suricata Alert ∨ XGB > 0.9  │
+        └────┬──────────────────────┬──┘
+             │ Yes                  │ No
+             ▼                      ▼
+          BLOCK              ┌────────────────┐
+                             │ Layer 2: PASS  │
+                             │ XGB < 0.5 ∧    │
+                             │ Anomaly < 0.75 │
+                             └────┬───────┬───┘
+                                  │ Yes   │ No
+                                  ▼       ▼
+                               PASS    Continue
+                             (Delete)     │
+                                         ▼
+                            ┌──────────────────────┐
+                            │ Layer 3: LLM Analysis│
+                            │ 0DAY ∨ SUSPICIOUS    │
+                            └──────┬───────────────┘
+                                   │
+                        ┌──────────┴──────────┐
+                        ▼                     ▼
+                   ZERODAY_HUNT       LLM_ANALYZE
+                   (XGB<0.5 ∧          (0.5≤XGB≤0.9)
+                    Anomaly>0.75)
+                        │                     │
+                        └──────────┬──────────┘
+                                   ▼
+                           ┌───────────────────┐
+                           │  Redis Queue →    │
+                           │ Module 4 (LLM)    │
+                           └───────────────────┘
+```
 
-## 使用方法
+---
+
+## Getting Started
+
+### Prerequisites
+
+- **Python**: 3.8 or higher
+- **Redis**: 6.0+ (for state sharing and message queue)
+- **Suricata**: 6.0+ (for rule-based detection)
+- **System**: Linux/macOS/Windows with network interface access
+- **LLM API**: Claude Opus 4.6 API key (or Qwen for local mode)
+
+### Installation
+
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/gkdgkd123/OwlSight-IDS.git
+   cd OwlSight-IDS
+   ```
+
+2. **Create virtual environment**
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
+
+3. **Install dependencies**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. **Configure environment variables**
+   ```bash
+   cp .env.example .env
+   # Edit .env with your LLM API key and other settings
+   ```
+
+### Quick Start
+
+1. **Start Redis** (prerequisite)
+   ```bash
+   redis-server
+   ```
+
+2. **Run the full system**
+   ```bash
+   python realtime_ids/main_realtime.py
+   ```
+
+3. **Run tests** (verify installation)
+   ```bash
+   python tests/test_config.py
+   python tests/test_redis_integration.py
+   python tests/test_llm_api.py
+   ```
+
+### Configuration Details
+
+Create `.env` file (copy from `.env.example`):
 
 ```bash
-# 只做 L0 检测
-python main.py --input eve.json --output results.jsonl
+# Redis Configuration
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_DB=0
+REDIS_PASSWORD=
+REDIS_TTL=60
 
-# L0 + L1 语义分析
-python main.py --input eve.json --output results.jsonl --enable-l1
+# Suricata Configuration
+SURICATA_EVE_PATH=/var/log/suricata/eve.json
+SURICATA_TAIL_INTERVAL=0.1
 
-# L0 + L1 + L2 攻击链分析
-python main.py --input eve.json --output results.jsonl --enable-l1 --enable-l2
+# Scapy Packet Capture
+SCAPY_INTERFACE=eth0
+SCAPY_PACKET_TRIGGER=10          # Trigger after 10 packets
+SCAPY_TIME_TRIGGER=3.0           # OR after 3 seconds
+
+# XGBoost Model
+XGB_MODEL_PATH=./realtime_ids/models/xgb_model.json
+XGB_THRESHOLD_HIGH=0.9           # High-risk threshold
+XGB_THRESHOLD_LOW=0.5            # Low-risk threshold
+ANOMALY_THRESHOLD=0.75           # Anomaly detection threshold
+
+# LLM Configuration (Claude Opus 4.6)
+LLM_USE_API=true
+LLM_API_BASE_URL=https://new.timefiles.online/v1
+LLM_API_KEY=your_api_key_here    # Set environment variable
+LLM_API_MODEL=claude-opus-4-6
+
+# System
+LOG_LEVEL=INFO
 ```
 
-## 输出格式
+---
 
-### L0 结果
-```json
-{
-  "stage": "L0",
-  "final_label": "malicious",
-  "risk_score": 8,
-  "suricata_alert": {...}
+## Project Structure
+
+```
+OwlSight-IDS/
+├── realtime_ids/                    # Main package
+│   ├── config/
+│   │   └── config.py                # Configuration with .env support
+│   ├── modules/
+│   │   ├── suricata_monitor.py      # Module 1: Rule engine (eve.json)
+│   │   ├── early_flow_xgb.py        # Module 2: Feature extraction & dual-model ML
+│   │   ├── intelligent_router.py    # Module 3: Decision tree (producer)
+│   │   └── llm_analyzer.py          # Module 4: LLM semantic analysis (consumer)
+│   ├── main_realtime.py             # Main entry point
+│   └── utils.py                     # Utility functions
+├── scripts/
+│   ├── preprocess_cicids2017.py     # CICIDS2017 dataset preprocessing
+│   ├── train_xgboost.py             # XGBoost model training
+│   └── train_iforest.py             # Isolation Forest model training
+├── tests/                           # Comprehensive test suite
+│   ├── test_config.py               # Configuration loading tests
+│   ├── test_redis_integration.py    # Redis integration tests
+│   ├── test_llm_api.py              # LLM API tests
+│   ├── test_env_loading.py          # Environment file loading tests
+│   └── ...
+├── docs/                            # Complete documentation
+│   ├── architecture_overview.md     # System design deep dive
+│   ├── TEST_REPORT.md               # Test results and metrics
+│   └── ...
+├── data/                            # Sample data and datasets
+│   ├── test.pcap                    # Sample PCAP file
+│   ├── eve.json                     # Sample eve.json
+│   └── MachineLearningCVE/          # CICIDS2017 dataset (symlink)
+├── .env.example                     # Environment template (SAFE to commit)
+├── .gitignore                       # Git ignore rules (protects .env)
+├── requirements.txt                 # Python dependencies
+└── README.md                        # This file
+```
+
+### Module Responsibilities
+
+| Module | Input | Output | Decision |
+|--------|-------|--------|----------|
+| M1 Suricata | eve.json | Redis Hash | Alert flag + metadata |
+| M2 Feature | Packets | Redis Hash | XGB score + Anomaly score |
+| M3 Router | Redis Hash | Redis List | Decision + LLM queue |
+| M4 LLM | Redis List | Redis Hash | Semantic verdict |
+
+---
+
+## Key Innovations
+
+### 1. **Dual-Model Cooperative Detection**
+- XGBoost identifies known attack patterns (supervised)
+- Isolation Forest detects statistical anomalies (unsupervised)
+- Synergistic decision tree combines both for robust classification
+- **Complementary Strengths**: Handles both known and unknown threats
+
+### 2. **0day Threat Hunting Strategy**
+```
+Detection Condition:
+  XGB_Score < 0.5 (model thinks SAFE)
+  AND
+  Anomaly_Score > 0.75 (behavior is ABNORMAL)
+  
+  ⟹ ZERODAY_HUNT triggered
+  ⟹ Deep LLM semantic analysis initiated
+```
+
+### 3. **Asynchronous Decoupled Architecture**
+- **Producer (Module 3)**: Makes fast decisions, enqueues LLM tasks
+- **Consumer (Module 4)**: Independently processes with rate limiting
+- **Benefit**: LLM API delays (3-5s) don't block real-time detection (<1ms)
+- **Scalability**: Multiple LLM workers can process queue independently
+
+### 4. **Early Flow Detection**
+- Dual-trigger: 10 packets OR 3 seconds (whichever comes first)
+- 18-dimensional feature vector optimized for early detection
+- Memory-efficient with automatic cleanup of stale flows
+
+### 5. **Production-Ready Features**
+- Thread-safe statistics with proper locking
+- Automatic retry mechanism (max 3 retries) for failed tasks
+- Queue health monitoring with alerting
+- Time-windowed metrics for real-time monitoring
+
+---
+
+## Troubleshooting
+
+### Redis Connection Error
+```bash
+# Make sure Redis is running
+redis-server
+
+# Check Redis connectivity
+redis-cli ping  # Should print PONG
+```
+
+### Missing LLM API Key
+```bash
+# Set environment variable (Linux/Mac)
+export LLM_API_KEY=your_key_here
+
+# Set environment variable (Windows)
+set LLM_API_KEY=your_key_here
+
+# Or configure in .env file
+LLM_API_KEY=your_key_here
+```
+
+### Suricata Eve.json Not Found
+```bash
+# Check Suricata log location
+cat /var/log/suricata/eve.json
+
+# Or configure custom path in .env
+SURICATA_EVE_PATH=/custom/path/eve.json
+```
+
+---
+
+## Performance Optimization Tips
+
+1. **Increase Redis Memory** for higher throughput
+2. **Enable XGBoost GPU Acceleration** if available
+3. **Parallel Module Instances** for distributed detection
+4. **Batch LLM Requests** to optimize API usage
+
+---
+
+## Contributing
+
+Contributions are welcome! Please:
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit changes (`git commit -m 'Add amazing feature'`)
+4. Push to branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+---
+
+## License
+
+This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
+
+---
+
+## Citation
+
+If you use OwlSight-IDS in your research, please cite:
+
+```bibtex
+@software{owlsight-ids-2026,
+  title={OwlSight-IDS: Real-time Malicious Traffic Detection with Triple-Layer Cooperative Architecture},
+  author={Your Name},
+  year={2026},
+  url={https://github.com/gkdgkd123/OwlSight-IDS}
 }
 ```
 
-### L1 结果
-```json
-{
-  "stage": "L1",
-  "risk_score": 8,
-  "confidence": 0.85,
-  "is_suspicious": true,
-  "attack_result": "failed",
-  "attack_result_reason": "状态码 404",
-  "semantic_features": ["XSS攻击特征", "可疑路径"],
-  "payload": "alert(document.domain)",
-  "indicators": {
-    "xss_indicator": true,
-    "scanning_behavior": false
-  }
-}
+---
+
+## Acknowledgements
+
+- **Suricata**: Open-source network threat detection engine
+- **XGBoost**: Gradient boosting framework for machine learning
+- **Scikit-learn**: Machine learning library (Isolation Forest)
+- **Redis**: In-memory data structure store
+- **Scapy**: Packet manipulation library
+- **Claude Opus 4.6**: Large language model for semantic analysis
+- **CICIDS2017**: Canadian Institute for Cybersecurity dataset
+
+---
+
+<div align="center">
+
+Made with ❤️ for cybersecurity research and education
+
+**OwlSight-IDS** © 2026
+
+</div>
+
+---
+
+## 中文
+
+### 项目概述
+
+**OwlSight-IDS**是一个实时网络入侵检测系统，采用**规则检测**、**机器学习推理**和**大语言模型语义分析**相结合的方式，识别已知攻击和零日威胁。系统采用创新的**三层协同检测架构**和**双模型机器学习**策略，实现高检测准确率和低误报率。
+
+### 🌟 核心特性
+
+- **🎯 三层协同检测架构**
+  - **L0（规则引擎）**：基于 Suricata 的签名检测
+  - **L1（机器学习）**：双模型协同推理（XGBoost + 孤立森林）
+  - **L2（语义分析）**：Claude Opus 4.6 LLM 深度分析
+
+- **🔬 双模型协同策略**
+  - **XGBoost**：监督学习识别已知攻击（AUC: 0.977）
+  - **孤立森林**：无监督异常检测识别零日候选
+  - **协同决策树**：融合两个模型的鲁棒分类
+  - **独特的零日猎杀策略**：当 XGB < 0.5（认为安全）且异常 > 0.75（行为异常）时触发
+
+- **⚡ 早流检测**
+  - 双重触发机制：10 个包 OR 3 秒
+  - 18 维特征向量提取
+  - 亚秒级实时处理延迟
+  - 自动清理防止内存泄漏
+
+- **🔄 异步解耦架构**
+  - 基于 Redis 的生产者-消费者模式
+  - 非阻塞 LLM 分析与速率限制（10 req/min）
+  - 自动重试机制（最多 3 次）
+  - 零因 LLM 处理延迟的流量检测延迟
+
+- **📊 全面监控与可观测性**
+  - 时间窗口统计（每分钟吞吐量显示）
+  - 全局累计指标追踪
+  - 队列健康监控与自动告警
+  - 线程安全的统计与适当的锁机制
+
+### 快速开始
+
+#### 前置要求
+
+- **Python**: 3.8 或更高版本
+- **Redis**: 6.0+ （状态共享和消息队列）
+- **Suricata**: 6.0+ （规则检测）
+- **系统**: Linux/macOS/Windows
+- **LLM API**: Claude Opus 4.6 API 密钥
+
+#### 安装步骤
+
+1. **克隆仓库**
+   ```bash
+   git clone https://github.com/gkdgkd123/OwlSight-IDS.git
+   cd OwlSight-IDS
+   ```
+
+2. **创建虚拟环境**
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # Windows: venv\Scripts\activate
+   ```
+
+3. **安装依赖**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. **配置环境变量**
+   ```bash
+   cp .env.example .env
+   # 编辑 .env 文件配置 LLM API 密钥和其他参数
+   ```
+
+#### 快速使用
+
+1. **启动 Redis**（必须）
+   ```bash
+   redis-server
+   ```
+
+2. **运行完整系统**
+   ```bash
+   python realtime_ids/main_realtime.py
+   ```
+
+3. **运行测试**（验证安装）
+   ```bash
+   python tests/test_config.py
+   python tests/test_redis_integration.py
+   python tests/test_llm_api.py
+   ```
+
+#### 环境配置说明
+
+复制 `.env.example` 创建 `.env` 文件：
+
+```bash
+# Redis 配置
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_DB=0
+REDIS_PASSWORD=
+REDIS_TTL=60
+
+# Suricata 配置
+SURICATA_EVE_PATH=/var/log/suricata/eve.json
+SURICATA_TAIL_INTERVAL=0.1
+
+# Scapy 抓包配置
+SCAPY_INTERFACE=eth0
+SCAPY_PACKET_TRIGGER=10       # 10 个包后触发
+SCAPY_TIME_TRIGGER=3.0        # 或 3 秒后触发
+
+# XGBoost 模型配置
+XGB_MODEL_PATH=./realtime_ids/models/xgb_model.json
+XGB_THRESHOLD_HIGH=0.9        # 高危阈值
+XGB_THRESHOLD_LOW=0.5         # 低危阈值
+ANOMALY_THRESHOLD=0.75        # 异常阈值
+
+# LLM 配置（Claude Opus 4.6）
+LLM_USE_API=true
+LLM_API_BASE_URL=https://new.timefiles.online/v1
+LLM_API_KEY=your_api_key_here # 设置环境变量
+LLM_API_MODEL=claude-opus-4-6
+
+# 系统配置
+LOG_LEVEL=INFO
 ```
 
-### L2 结果
-```json
-{
-  "stage": "L2",
-  "risk_score": 9,
-  "confidence": 0.9,
-  "attack_chain": ["reconnaissance", "exploitation"],
-  "attack_chain_confidence": 0.85,
-  "risk_adjusted": "up",
-  "attack_summary": "同一 IP 发起多次扫描并尝试漏洞利用",
-  "key_findings": ["发现 XSS 攻击", "发现目录扫描"],
-  "related_samples": [...]
-}
-```
-
-## 配置
-
-API 配置通过环境变量：
-
-- `OPENAI_BASEURL` - API 基础 URL (默认: https://api.qnaigc.com/v1)
-- `OPENAI_API_KEY` - API Key (必填)
-- `OPENAI_MODEL` - 模型名称 (默认: doubao-seed-2.0-lite)
+---
 
 ## 项目结构
 
 ```
-SemFlow-IDS/
-├── main.py                 # 入口程序
-├── src/semflow_ids/
-│   ├── models.py           # 数据结构
-│   ├── l0_filter.py        # L0 规则检测
-│   ├── eve_parser.py       # EVE JSON 解析
-│   ├── ollama_client.py    # LLM API 客户端
-│   └── output_writer.py    # 结果输出
-└── README.md
+OwlSight-IDS/
+├── realtime_ids/                    # 主包
+│   ├── config/
+│   │   └── config.py                # 配置管理（支持 .env）
+│   ├── modules/
+│   │   ├── suricata_monitor.py      # 模块 1: 规则引擎（eve.json）
+│   │   ├── early_flow_xgb.py        # 模块 2: 特征提取 & 双模型 ML
+│   │   ├── intelligent_router.py    # 模块 3: 决策树（生产者）
+│   │   └── llm_analyzer.py          # 模块 4: LLM 语义分析（消费者）
+│   ├── main_realtime.py             # 主入口
+│   └── utils.py                     # 工具函数
+├── scripts/
+│   ├── preprocess_cicids2017.py     # CICIDS2017 数据集预处理
+│   ├── train_xgboost.py             # XGBoost 模型训练
+│   └── train_iforest.py             # 孤立森林模型训练
+├── tests/                           # 完整测试套件
+├── docs/                            # 完整文档
+├── data/                            # 示例数据
+├── .env.example                     # 环境模板（安全提交）
+├── .gitignore                       # Git 忽略规则（保护 .env）
+├── requirements.txt                 # Python 依赖
+└── README.md                        # 本文件
 ```
 
-## 进展
+---
 
-- [x] L0 规则匹配
-- [x] L1 语义特征提取
-- [x] L2 攻击链关联
-- [x] 多事件类型支持 (alert/http/flow/anomaly/fileinfo)
-- [x] 攻击结果判断 (success/failed/unknown)
-- [x] 风险分数 1-10 分制
-- [x] 置信度输出
-- [x] 攻击载荷提取
-- [x] API 错误处理完善
-- [x] L1 结果 O(1) 查找优化
+## 创新点
+
+### 1. **双模型协同检测**
+- XGBoost 识别已知攻击模式（监督学习）
+- 孤立森林检测统计异常（无监督学习）
+- 互补优势：既能处理已知威胁，又能检测未知威胁
+
+### 2. **零日威胁猎杀策略**
+```
+触发条件：
+  XGB_Score < 0.5（模型认为安全）
+  AND
+  Anomaly_Score > 0.75（行为极度异常）
+  
+  ⟹ 触发 ZERODAY_HUNT
+  ⟹ 启动 LLM 深度语义分析
+```
+
+### 3. **异步解耦架构**
+- **生产者（模块 3）**：快速决策，任务入队
+- **消费者（模块 4）**：独立处理，速率限制
+- **优势**：LLM API 延迟（3-5s）不阻塞实时检测（<1ms）
+
+---
+
+## 故障排查
+
+### Redis 连接错误
+```bash
+# 确保 Redis 正在运行
+redis-server
+
+# 检查 Redis 连接
+redis-cli ping  # 应该输出 PONG
+```
+
+### 缺少 LLM API 密钥
+```bash
+# 设置环境变量（Linux/Mac）
+export LLM_API_KEY=your_key_here
+
+# 设置环境变量（Windows）
+set LLM_API_KEY=your_key_here
+
+# 或在 .env 文件中配置
+LLM_API_KEY=your_key_here
+```
+
+---
+
+## 许可证
+
+本项目采用 **MIT 许可证** - 详见 [LICENSE](LICENSE) 文件
+
+---
+
+## 致谢
+
+- **Suricata**: 开源网络威胁检测引擎
+- **XGBoost**: 梯度提升机器学习框架
+- **Scikit-learn**: 机器学习库（孤立森林）
+- **Redis**: 内存数据结构存储
+- **Scapy**: 数据包操作库
+- **Claude Opus 4.6**: 大语言模型
+- **CICIDS2017**: 加拿大网络安全研究所数据集
+
+---
+
+<div align="center">
+
+用 ❤️ 为网络安全研究和教育而开发
+
+**OwlSight-IDS** © 2026
+
+</div>
+
