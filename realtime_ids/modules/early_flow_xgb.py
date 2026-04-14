@@ -6,6 +6,7 @@ Module 2: 早流特征提取与双模型推理模块
 import time
 import json
 import redis
+import threading
 import numpy as np
 from typing import Dict, List, Any, Optional
 from collections import defaultdict
@@ -261,6 +262,7 @@ class EarlyFlowDualModel:
         )
 
         self.active_flows: Dict[str, FlowStatistics] = {}
+        self.lock = threading.Lock()  # 保护 active_flows 字典的线程锁
         self.dual_model = DualModelInference(xgb_config, self.logger)
         self.running = False
 
@@ -269,7 +271,20 @@ class EarlyFlowDualModel:
         self.last_cleanup_time = time.time()
         self.cleanup_interval = 10.0  # 每 10 秒清理一次
 
+        # Suricata Early Abort 监听（独立 Redis 连接，因为 subscribe 会独占连接）
+        self.pubsub_client = redis.Redis(
+            host=redis_config.host,
+            port=redis_config.port,
+            db=redis_config.db,
+            password=redis_config.password,
+            decode_responses=True
+        )
+        self.pubsub = self.pubsub_client.pubsub()
+        self.pubsub.subscribe("suricata_alerts_channel")
+        self.alert_listener_thread = None
+
         self.logger.info(f"早流双模型推理模块初始化完成，监听接口: {scapy_config.interface}")
+        self.logger.info("已订阅 Suricata 报警频道: suricata_alerts_channel")
 
     def _extract_five_tuple(self, packet) -> Optional[str]:
         """从数据包提取五元组"""
@@ -327,6 +342,34 @@ class EarlyFlowDualModel:
         if stale_keys:
             self.logger.debug(f"清理 {len(stale_keys)} 个超时流（超过 {self.flow_timeout}s）")
 
+    def _listen_for_alerts(self):
+        """Suricata 报警监听线程：订阅 Pub/Sub，收到报警后立刻掐断对应流的特征采集"""
+        self.logger.info("[Alert Listener] Suricata 报警监听线程已启动")
+
+        try:
+            for message in self.pubsub.listen():
+                if not self.running:
+                    break
+
+                if message["type"] != "message":
+                    continue
+
+                flow_key = message["data"]
+
+                # 抢占逻辑：使用锁保护字典访问
+                with self.lock:
+                    if flow_key in self.active_flows:
+                        # 不直接 delete，而是标记为已推理（惰性清理原则）
+                        self.active_flows[flow_key].already_inferred = True
+                        self.logger.debug(
+                            f"[Early Abort] 收到 Suricata 报警，立刻掐断特征采集: {flow_key}"
+                        )
+
+        except Exception as e:
+            self.logger.error(f"[Alert Listener] 监听线程异常: {e}")
+        finally:
+            self.logger.info("[Alert Listener] Suricata 报警监听线程已退出")
+
     def _process_flow(self, flow_key: str, flow_stats: FlowStatistics):
         """处理触发的流：特征提取 + 双模型推理"""
         # 计算特征
@@ -370,20 +413,24 @@ class EarlyFlowDualModel:
         timestamp = time.time()
         tcp_flag = packet[TCP].flags if TCP in packet else None
 
-        # 初始化或更新流统计
-        if flow_key not in self.active_flows:
-            self.active_flows[flow_key] = FlowStatistics()
+        with self.lock:
+            # 初始化或更新流统计
+            if flow_key not in self.active_flows:
+                self.active_flows[flow_key] = FlowStatistics()
 
-        flow_stats = self.active_flows[flow_key]
+            flow_stats = self.active_flows[flow_key]
 
-        # 如果已推理过，忽略后续包（防止重复推理）
-        if flow_stats.already_inferred:
-            return
+            # 如果已推理过（含 Suricata 报警掐断），忽略后续包
+            if flow_stats.already_inferred:
+                return
 
-        flow_stats.add_packet(packet_length, timestamp, tcp_flag)
+            flow_stats.add_packet(packet_length, timestamp, tcp_flag)
 
-        # 检查触发条件
-        if self._should_trigger(flow_key, flow_stats):
+            # 检查触发条件
+            should_trigger = self._should_trigger(flow_key, flow_stats)
+
+        # 触发推理放在锁外，避免长时间持锁
+        if should_trigger:
             try:
                 self._process_flow(flow_key, flow_stats)
             except Exception as e:
@@ -392,12 +439,23 @@ class EarlyFlowDualModel:
         # 定期清理僵尸流
         current_time = time.time()
         if current_time - self.last_cleanup_time >= self.cleanup_interval:
-            self._cleanup_stale_flows()
+            with self.lock:
+                self._cleanup_stale_flows()
             self.last_cleanup_time = current_time
 
     def start(self):
         """启动抓包与推理"""
         self.running = True
+
+        # 先启动 Suricata 报警监听线程
+        self.alert_listener_thread = threading.Thread(
+            target=self._listen_for_alerts,
+            name="SuricataAlertListener",
+            daemon=True
+        )
+        self.alert_listener_thread.start()
+        self.logger.info("Suricata 报警监听线程已启动")
+
         self.logger.info(f"开始监听网卡: {self.scapy_config.interface}")
 
         try:
@@ -417,6 +475,19 @@ class EarlyFlowDualModel:
     def stop(self):
         """停止模块"""
         self.running = False
+
+        # 关闭 Pub/Sub 监听
+        try:
+            self.pubsub.unsubscribe()
+            self.pubsub.close()
+            self.pubsub_client.close()
+        except Exception as e:
+            self.logger.debug(f"关闭 Pub/Sub 连接时出现异常: {e}")
+
+        # 等待监听线程退出
+        if self.alert_listener_thread and self.alert_listener_thread.is_alive():
+            self.alert_listener_thread.join(timeout=2)
+
         self.logger.info("早流双模型推理模块停止")
 
 

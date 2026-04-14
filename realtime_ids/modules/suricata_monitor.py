@@ -70,10 +70,13 @@ class SuricataMonitor:
                 }
             )
             self.redis_client.expire(five_tuple_key, self.redis_config.ttl)
-            
+
+            # 通过 Pub/Sub 广播高危流提前终止信号
+            self.redis_client.publish("suricata_alerts_channel", five_tuple_key)
+
             self.logger.info(
                 f"[ALERT] 检测到高危流量 {five_tuple_key} | "
-                f"规则: {signature} | 严重级别: {severity}"
+                f"规则: {signature} | 严重级别: {severity} | 已广播提前终止信号"
             )
         except Exception as e:
             self.logger.error(f"写入 Redis 失败: {e}")
