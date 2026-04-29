@@ -9,22 +9,17 @@ from typing import Optional, Dict, Any
 from pathlib import Path
 from ..utils import generate_five_tuple_key, setup_logger
 from ..config.config import RedisConfig, SuricataConfig
+from ..config.redis_factory import RedisConnectionFactory
 
 
 class SuricataMonitor:
-    
+
     def __init__(self, redis_config: RedisConfig, suricata_config: SuricataConfig):
         self.redis_config = redis_config
         self.suricata_config = suricata_config
         self.logger = setup_logger("SuricataMonitor")
-        
-        self.redis_client = redis.Redis(
-            host=redis_config.host,
-            port=redis_config.port,
-            db=redis_config.db,
-            password=redis_config.password,
-            decode_responses=True
-        )
+
+        self.redis_client = RedisConnectionFactory.get_client_with_retry(redis_config)
         
         self.eve_path = Path(suricata_config.eve_json_path)
         self.running = False
@@ -72,7 +67,13 @@ class SuricataMonitor:
             self.redis_client.expire(five_tuple_key, self.redis_config.ttl)
 
             # 通过 Pub/Sub 广播高危流提前终止信号
-            self.redis_client.publish("suricata_alerts_channel", five_tuple_key)
+            try:
+                self.redis_client.publish("suricata_alerts_channel", five_tuple_key)
+            except redis.RedisError as pub_err:
+                self.logger.error(
+                    f"[PUB/SUB] 发布 Early Abort 信号失败: {five_tuple_key}, 错误: {pub_err}"
+                )
+                # Early Abort 失效不影响主流程，继续
 
             self.logger.info(
                 f"[ALERT] 检测到高危流量 {five_tuple_key} | "
@@ -118,6 +119,10 @@ class SuricataMonitor:
     
     def stop(self):
         self.running = False
+        try:
+            self.redis_client.close()
+        except Exception:
+            pass
         self.logger.info("Suricata 监控模块停止")
 
 

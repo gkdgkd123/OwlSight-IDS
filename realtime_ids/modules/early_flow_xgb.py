@@ -9,11 +9,12 @@ import redis
 import threading
 import numpy as np
 from typing import Dict, List, Any, Optional
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from pathlib import Path
 from scapy.all import sniff, IP, TCP, UDP
 from ..utils import generate_five_tuple_key, setup_logger
 from ..config.config import RedisConfig, ScapyConfig, XGBoostConfig
+from ..config.redis_factory import RedisConnectionFactory
 
 
 class FlowStatistics:
@@ -253,15 +254,10 @@ class EarlyFlowDualModel:
         self.xgb_config = xgb_config
         self.logger = setup_logger("EarlyFlowDualModel")
 
-        self.redis_client = redis.Redis(
-            host=redis_config.host,
-            port=redis_config.port,
-            db=redis_config.db,
-            password=redis_config.password,
-            decode_responses=True
-        )
+        self.redis_client = RedisConnectionFactory.get_client_with_retry(redis_config)
 
-        self.active_flows: Dict[str, FlowStatistics] = {}
+        self.active_flows: OrderedDict[str, FlowStatistics] = OrderedDict()
+        self.max_active_flows = 50000  # 内存上限：最多跟踪 50K 个并发流
         self.lock = threading.Lock()  # 保护 active_flows 字典的线程锁
         self.dual_model = DualModelInference(xgb_config, self.logger)
         self.running = False
@@ -272,13 +268,7 @@ class EarlyFlowDualModel:
         self.cleanup_interval = 10.0  # 每 10 秒清理一次
 
         # Suricata Early Abort 监听（独立 Redis 连接，因为 subscribe 会独占连接）
-        self.pubsub_client = redis.Redis(
-            host=redis_config.host,
-            port=redis_config.port,
-            db=redis_config.db,
-            password=redis_config.password,
-            decode_responses=True
-        )
+        self.pubsub_client = RedisConnectionFactory.get_dedicated_client(redis_config)
         self.pubsub = self.pubsub_client.pubsub()
         self.pubsub.subscribe("suricata_alerts_channel")
         self.alert_listener_thread = None
@@ -380,14 +370,16 @@ class EarlyFlowDualModel:
         xgb_score = scores['xgb_score']
         anomaly_score = scores['anomaly_score']
 
-        # 写入 Redis（兼容 Redis 3.0）
+        # 写入 Redis（使用 Pipeline 保证原子性）
         try:
-            self.redis_client.hset(flow_key, "xgb_score", str(xgb_score))
-            self.redis_client.hset(flow_key, "anomaly_score", str(anomaly_score))
-            self.redis_client.hset(flow_key, "packet_count", str(flow_stats.packet_count))
-            self.redis_client.hset(flow_key, "flow_start_time", str(flow_stats.flow_start_time))
-            self.redis_client.hset(flow_key, "features", json.dumps(features))
-            self.redis_client.expire(flow_key, self.redis_config.ttl)
+            pipe = self.redis_client.pipeline()
+            pipe.hset(flow_key, "xgb_score", str(xgb_score))
+            pipe.hset(flow_key, "anomaly_score", str(anomaly_score))
+            pipe.hset(flow_key, "packet_count", str(flow_stats.packet_count))
+            pipe.hset(flow_key, "flow_start_time", str(flow_stats.flow_start_time))
+            pipe.hset(flow_key, "features", json.dumps(features))
+            pipe.expire(flow_key, self.redis_config.ttl)
+            pipe.execute()
 
             self.logger.info(
                 f"[DUAL-MODEL] 流量分析完成 {flow_key} | "
@@ -416,7 +408,14 @@ class EarlyFlowDualModel:
         with self.lock:
             # 初始化或更新流统计
             if flow_key not in self.active_flows:
+                # LRU 淘汰：超过上限时移除最旧的流
+                while len(self.active_flows) >= self.max_active_flows:
+                    evicted_key, _ = self.active_flows.popitem(last=False)
+                    self.logger.debug(f"[LRU] 淘汰最旧流: {evicted_key} (active_flows={len(self.active_flows)})")
                 self.active_flows[flow_key] = FlowStatistics()
+            else:
+                # 访问已有流时移到末尾（LRU 更新）
+                self.active_flows.move_to_end(flow_key)
 
             flow_stats = self.active_flows[flow_key]
 
@@ -483,6 +482,12 @@ class EarlyFlowDualModel:
             self.pubsub_client.close()
         except Exception as e:
             self.logger.debug(f"关闭 Pub/Sub 连接时出现异常: {e}")
+
+        # 关闭主 Redis 连接
+        try:
+            self.redis_client.close()
+        except Exception:
+            pass
 
         # 等待监听线程退出
         if self.alert_listener_thread and self.alert_listener_thread.is_alive():

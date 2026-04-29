@@ -13,12 +13,12 @@ import json
 import redis
 import os
 import time
-import signal
 import threading
 from typing import Dict, Any, Optional
 from pathlib import Path
 from ..utils import sanitize_text, setup_logger
 from ..config.config import RedisConfig, LLMConfig
+from ..config.redis_factory import RedisConnectionFactory
 
 
 class LLMAnalyzer:
@@ -29,13 +29,7 @@ class LLMAnalyzer:
         self.llm_config = llm_config
         self.logger = setup_logger("LLMAnalyzer")
 
-        self.redis_client = redis.Redis(
-            host=redis_config.host,
-            port=redis_config.port,
-            db=redis_config.db,
-            password=redis_config.password,
-            decode_responses=True
-        )
+        self.redis_client = RedisConnectionFactory.get_client_with_retry(redis_config)
 
         self.running = False
         self.llm_queue_name = "llm_task_queue"
@@ -57,10 +51,8 @@ class LLMAnalyzer:
             'benign_detected': 0
         }
 
-        # 优雅停机信号
+        # 优雅停机信号（由外部调用 stop() 触发，不在此注册 signal）
         self.shutdown_event = threading.Event()
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
 
         # 根据配置选择使用 API 或本地模型
         if llm_config.use_api:
@@ -79,9 +71,9 @@ class LLMAnalyzer:
             if llm_config.use_rag:
                 self._load_vector_store()
 
-    def _signal_handler(self, signum, frame):
-        """处理停机信号"""
-        self.logger.info(f"收到停机信号 {signum}，准备优雅停机...")
+    def request_shutdown(self):
+        """外部调用：请求优雅停机"""
+        self.logger.info("收到停机请求，准备优雅停机...")
         self.shutdown_event.set()
         self.running = False
 
@@ -133,6 +125,8 @@ class LLMAnalyzer:
         except Exception as e:
             self.logger.error(f"检查队列健康状态失败: {e}")
             return 0, 0
+
+    def _init_openai_client(self):
         """初始化 API 配置（使用 requests）"""
         if not self.llm_config.api_key:
             self.logger.error("API Key 未设置，请设置环境变量 LLM_API_KEY")
@@ -453,13 +447,16 @@ JSON 输出："""
                 f"建议: {result.get('recommended_action')}"
             )
 
-            # 写入 Redis
+            # 写入 Redis（使用 Pipeline 保证原子性 + 刷新 TTL）
             try:
-                self.redis_client.hset(flow_key, "llm_result", json.dumps(result, ensure_ascii=False))
-                self.redis_client.hset(flow_key, "llm_is_malicious", str(result.get("is_malicious", False)))
-                self.redis_client.hset(flow_key, "llm_confidence", str(result.get("confidence", 0.0)))
-                self.redis_client.hset(flow_key, "llm_attack_type", result.get("attack_type", "Unknown"))
-                self.redis_client.hset(flow_key, "llm_threat_level", result.get("threat_level", "Unknown"))
+                pipe = self.redis_client.pipeline()
+                pipe.hset(flow_key, "llm_result", json.dumps(result, ensure_ascii=False))
+                pipe.hset(flow_key, "llm_is_malicious", str(result.get("is_malicious", False)))
+                pipe.hset(flow_key, "llm_confidence", str(result.get("confidence", 0.0)))
+                pipe.hset(flow_key, "llm_attack_type", result.get("attack_type", "Unknown"))
+                pipe.hset(flow_key, "llm_threat_level", result.get("threat_level", "Unknown"))
+                pipe.expire(flow_key, 300)  # LLM 结果保留 5 分钟
+                pipe.execute()
             except Exception as e:
                 self.logger.error(f"写入 LLM 结果到 Redis 失败: {e}")
                 raise
@@ -508,31 +505,66 @@ JSON 输出："""
 
         last_health_check = time.time()
         health_check_interval = 30.0  # 每 30 秒检查一次队列健康
+        consecutive_errors = 0
+        max_consecutive_errors = 5
 
         try:
             while self.running and not self.shutdown_event.is_set():
-                # 定期健康检查
-                current_time = time.time()
-                if current_time - last_health_check >= health_check_interval:
-                    self._check_queue_health()
-                    self._print_stats()
-                    last_health_check = current_time
+                try:
+                    # 定期健康检查
+                    current_time = time.time()
+                    if current_time - last_health_check >= health_check_interval:
+                        self._check_queue_health()
+                        self._print_stats()
+                        last_health_check = current_time
 
-                # BRPOP 阻塞消费（超时 1 秒，避免无法响应停机信号）
-                result = self.redis_client.brpop(self.llm_queue_name, timeout=1)
+                    # BRPOP 阻塞消费（超时 1 秒，避免无法响应停机信号）
+                    result = self.redis_client.brpop(self.llm_queue_name, timeout=1)
+                    consecutive_errors = 0  # 成功则重置
 
-                if result is None:
-                    continue  # 超时，继续循环
+                    if result is None:
+                        continue  # 超时，继续循环
 
-                queue_name, task_json = result
-                task_data = json.loads(task_json)
+                    queue_name, task_json = result
+                    task_data = json.loads(task_json)
 
-                # 处理任务
-                success = self._process_task(task_data)
+                    # 处理任务
+                    success = self._process_task(task_data)
 
-                # 失败则重试
-                if not success:
-                    self._retry_failed_task(task_json)
+                    # 失败则重试
+                    if not success:
+                        self._retry_failed_task(task_json)
+
+                except (redis.ConnectionError, redis.TimeoutError) as e:
+                    consecutive_errors += 1
+                    self.logger.error(
+                        f"Redis 连接异常 (连续第 {consecutive_errors} 次): {e}"
+                    )
+
+                    if consecutive_errors >= max_consecutive_errors:
+                        self.logger.critical(
+                            f"Redis 连续失败 {max_consecutive_errors} 次，尝试重建连接..."
+                        )
+                        try:
+                            from ..config.redis_factory import RedisConnectionFactory
+                            self.redis_client = RedisConnectionFactory.get_client_with_retry(
+                                self.redis_config, max_retries=3
+                            )
+                            consecutive_errors = 0
+                            self.logger.info("Redis 重建连接成功")
+                        except Exception as reconnect_err:
+                            self.logger.critical(
+                                f"Redis 重建连接失败: {reconnect_err}，等待 10s 后重试"
+                            )
+                            time.sleep(10)
+                    else:
+                        # 指数退避
+                        backoff = min(2 ** consecutive_errors, 30)
+                        time.sleep(backoff)
+
+                except Exception as e:
+                    self.logger.error(f"消费循环未知异常: {e}")
+                    time.sleep(1)
 
         except KeyboardInterrupt:
             self.logger.info("收到中断信号，停止消费者")
@@ -543,6 +575,10 @@ JSON 输出："""
         """停止消费者 Worker"""
         self.running = False
         self._print_stats()
+        try:
+            self.redis_client.close()
+        except Exception:
+            pass
         self.logger.info("LLM 消费者 Worker 停止")
 
     def _print_stats(self):

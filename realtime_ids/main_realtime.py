@@ -42,48 +42,50 @@ class SemFlowIDS:
         
         self.intelligent_router = IntelligentRouter(
             config.redis,
-            config.xgboost,
-            llm_callback=self._llm_callback
+            config.xgboost
         )
-        
+
         self.threads = []
         self.running = False
-        
+
         self.logger.info("SemFlow-IDS 系统初始化完成")
-    
-    def _llm_callback(self, flow_key: str, state: dict):
-        self.llm_analyzer.analyze(flow_key, state)
     
     def start(self):
         self.running = True
         self.logger.info("=" * 60)
         self.logger.info("SemFlow-IDS 实时恶意流量协同检测系统启动")
         self.logger.info("=" * 60)
-        
+
         suricata_thread = threading.Thread(
             target=self.suricata_monitor.start,
             name="SuricataMonitor",
             daemon=True
         )
-        
+
         xgb_thread = threading.Thread(
             target=self.early_flow_xgb.start,
             name="EarlyFlowXGBoost",
             daemon=True
         )
-        
+
         router_thread = threading.Thread(
             target=self.intelligent_router.start,
             name="IntelligentRouter",
             daemon=True
         )
-        
-        self.threads = [suricata_thread, xgb_thread, router_thread]
-        
+
+        llm_thread = threading.Thread(
+            target=self.llm_analyzer.start,
+            name="LLMAnalyzer",
+            daemon=True
+        )
+
+        self.threads = [suricata_thread, xgb_thread, router_thread, llm_thread]
+
         for thread in self.threads:
             thread.start()
             self.logger.info(f"启动线程: {thread.name}")
-        
+
         try:
             for thread in self.threads:
                 thread.join()
@@ -93,11 +95,12 @@ class SemFlowIDS:
     
     def stop(self):
         self.running = False
-        
+
         self.suricata_monitor.stop()
         self.early_flow_xgb.stop()
         self.intelligent_router.stop()
-        
+        self.llm_analyzer.request_shutdown()
+
         self.logger.info("=" * 60)
         self.logger.info("SemFlow-IDS 系统已停止")
         self.logger.info("=" * 60)

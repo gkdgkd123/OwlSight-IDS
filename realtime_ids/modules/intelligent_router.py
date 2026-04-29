@@ -19,6 +19,7 @@ import threading
 from typing import Dict, Any
 from ..utils import setup_logger
 from ..config.config import RedisConfig, XGBoostConfig
+from ..config.redis_factory import RedisConnectionFactory
 
 
 class IntelligentRouter:
@@ -29,13 +30,7 @@ class IntelligentRouter:
         self.xgb_config = xgb_config
         self.logger = setup_logger("IntelligentRouter")
 
-        self.redis_client = redis.Redis(
-            host=redis_config.host,
-            port=redis_config.port,
-            db=redis_config.db,
-            password=redis_config.password,
-            decode_responses=True
-        )
+        self.redis_client = RedisConnectionFactory.get_client_with_retry(redis_config)
 
         self.running = False
         self.scan_interval = 1.0
@@ -76,6 +71,10 @@ class IntelligentRouter:
                         f"XGB_LOW={self.xgb_low_threshold}, "
                         f"ANOMALY={self.anomaly_threshold}")
         self.logger.info(f"LLM 任务队列: {self.llm_queue_name}")
+
+        # 孤儿任务检测配置
+        self.orphan_check_interval = 120.0  # 每 2 分钟检查一次
+        self.orphan_timeout = 300.0  # 5 分钟无 LLM 结果视为孤儿
 
     def _get_flow_state(self, flow_key: str) -> Dict[str, Any]:
         """从 Redis 读取流状态"""
@@ -213,8 +212,11 @@ class IntelligentRouter:
                         if decision == "BLOCK":
                             self.window_stats['blocked'] += 1
                             self.global_stats['blocked'] += 1
-                            self.redis_client.hset(flow_key, "decision", "BLOCK")
-                            self.redis_client.hset(flow_key, "decision_time", str(time.time()))
+                            pipe = self.redis_client.pipeline()
+                            pipe.hset(flow_key, "decision", "BLOCK")
+                            pipe.hset(flow_key, "decision_time", str(time.time()))
+                            pipe.expire(flow_key, self.redis_config.ttl)  # 刷新 TTL
+                            pipe.execute()
 
                         elif decision == "PASS":
                             self.window_stats['passed'] += 1
@@ -227,13 +229,19 @@ class IntelligentRouter:
                             self.window_stats['llm_analyzed'] += 1
                             self.global_stats['zeroday_detected'] += 1
                             self.global_stats['llm_analyzed'] += 1
-                            self.redis_client.hset(flow_key, "decision", "ZERODAY_HUNT")
+                            pipe = self.redis_client.pipeline()
+                            pipe.hset(flow_key, "decision", "ZERODAY_HUNT")
+                            pipe.expire(flow_key, self.redis_config.ttl)  # 刷新 TTL
+                            pipe.execute()
                             self._send_to_llm_queue(flow_key, state, decision)
 
                         elif decision == "LLM_ANALYZE":
                             self.window_stats['llm_analyzed'] += 1
                             self.global_stats['llm_analyzed'] += 1
-                            self.redis_client.hset(flow_key, "decision", "LLM_ANALYZE")
+                            pipe = self.redis_client.pipeline()
+                            pipe.hset(flow_key, "decision", "LLM_ANALYZE")
+                            pipe.expire(flow_key, self.redis_config.ttl)  # 刷新 TTL
+                            pipe.execute()
                             self._send_to_llm_queue(flow_key, state, decision)
 
                     processed_count += 1
@@ -283,22 +291,73 @@ class IntelligentRouter:
                     f"0day检测: {self.global_stats['zeroday_detected']}"
                 )
 
+    def _check_orphan_tasks(self):
+        """检测孤儿任务：已发送到 LLM 队列但长时间无结果的流"""
+        try:
+            cursor = 0
+            orphan_count = 0
+            current_time = time.time()
+
+            while True:
+                cursor, keys = self.redis_client.scan(
+                    cursor=cursor, match="*:*-*:*-*", count=500
+                )
+
+                for flow_key in keys:
+                    state = self.redis_client.hgetall(flow_key)
+                    if not state:
+                        continue
+
+                    decision = state.get("decision", "")
+                    has_llm_result = "llm_result" in state
+
+                    # 已决策为 LLM 分析但无结果，且超时
+                    if decision in ("ZERODAY_HUNT", "LLM_ANALYZE") and not has_llm_result:
+                        decision_time = float(state.get("decision_time", current_time))
+                        if current_time - decision_time > self.orphan_timeout:
+                            orphan_count += 1
+                            self.logger.warning(
+                                f"[ORPHAN] 检测到孤儿任务: {flow_key} | "
+                                f"决策: {decision} | 等待时间: {current_time - decision_time:.0f}s"
+                            )
+                            # 重新入队
+                            requeue_state = self._get_flow_state(flow_key)
+                            if requeue_state:
+                                self._send_to_llm_queue(flow_key, requeue_state, decision)
+                                self.logger.info(f"[ORPHAN] 重新入队: {flow_key}")
+
+                if cursor == 0:
+                    break
+
+            if orphan_count > 0:
+                self.logger.info(f"[ORPHAN] 本次检查发现 {orphan_count} 个孤儿任务并重新入队")
+
+        except Exception as e:
+            self.logger.error(f"孤儿任务检测失败: {e}")
+
     def start(self):
         """启动路由决策循环"""
         self.running = True
         self.logger.info("智能路由决策模块启动")
 
         last_window_print = time.time()
+        last_orphan_check = time.time()
 
         try:
             while self.running:
                 self._scan_redis_keys()
 
-                # 检查是否到达窗口边界（60 秒）
                 current_time = time.time()
+
+                # 检查是否到达窗口边界（60 秒）
                 if current_time - last_window_print >= self.window_duration:
                     self._print_window_stats()
                     last_window_print = current_time
+
+                # 定期孤儿任务检测
+                if current_time - last_orphan_check >= self.orphan_check_interval:
+                    self._check_orphan_tasks()
+                    last_orphan_check = current_time
 
                 time.sleep(self.scan_interval)
 
@@ -312,6 +371,10 @@ class IntelligentRouter:
         self.running = False
         self._print_window_stats()  # 打印最后一个窗口统计
         self._print_global_stats()  # 打印全局累计统计
+        try:
+            self.redis_client.close()
+        except Exception:
+            pass
         self.logger.info("智能路由决策模块停止")
 
 
