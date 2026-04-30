@@ -6,8 +6,8 @@ import pytest
 import json
 import time
 from unittest.mock import patch, MagicMock
-from realtime_ids.modules.llm_analyzer import LLMAnalyzer
-from realtime_ids.config.config import RedisConfig, LLMConfig
+from src.modules.llm_analyzer import LLMAnalyzer
+from src.config.config import RedisConfig, LLMConfig
 
 
 @pytest.fixture
@@ -15,7 +15,7 @@ def analyzer(mock_redis, llm_config):
     """创建使用 MockRedis 的 LLMAnalyzer（API 模式）"""
     redis_config = RedisConfig(host="localhost", port=6379)
     with patch(
-        "realtime_ids.modules.llm_analyzer.RedisConnectionFactory"
+        "src.modules.llm_analyzer.RedisConnectionFactory"
     ) as mock_factory:
         mock_factory.get_client_with_retry.return_value = mock_redis
         a = LLMAnalyzer(redis_config, llm_config)

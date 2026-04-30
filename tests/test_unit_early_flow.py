@@ -6,7 +6,7 @@ import pytest
 import time
 import numpy as np
 from collections import OrderedDict
-from realtime_ids.modules.early_flow_xgb import FlowStatistics, EarlyFlowDualModel
+from src.modules.early_flow_xgb import FlowStatistics, EarlyFlowDualModel
 
 
 class TestFlowStatistics:
@@ -87,7 +87,7 @@ class TestLRUEviction:
         """active_flows 应该是 OrderedDict"""
         from unittest.mock import patch
         with patch(
-            "realtime_ids.modules.early_flow_xgb.RedisConnectionFactory"
+            "src.modules.early_flow_xgb.RedisConnectionFactory"
         ) as mock_factory:
             mock_factory.get_client_with_retry.return_value = type("FakeRedis", (), {
                 "ping": lambda self: True,
@@ -103,7 +103,7 @@ class TestLRUEviction:
                 "close": lambda self: None,
             })()
 
-            from realtime_ids.config.config import RedisConfig, ScapyConfig, XGBoostConfig
+            from src.config.config import RedisConfig, ScapyConfig, XGBoostConfig
             module = EarlyFlowDualModel(
                 RedisConfig(), ScapyConfig(), XGBoostConfig()
             )

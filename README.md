@@ -227,7 +227,7 @@
 
 2. **Run the full system**
    ```bash
-   python realtime_ids/main_realtime.py
+   python src/main_realtime.py
    ```
 
 3. **Run tests** (verify installation)
@@ -259,7 +259,7 @@ SCAPY_PACKET_TRIGGER=10          # Trigger after 10 packets
 SCAPY_TIME_TRIGGER=3.0           # OR after 3 seconds
 
 # XGBoost Model
-XGB_MODEL_PATH=./realtime_ids/models/xgb_model.json
+XGB_MODEL_PATH=./src/models/xgb_model.json
 XGB_THRESHOLD_HIGH=0.9           # High-risk threshold
 XGB_THRESHOLD_LOW=0.5            # Low-risk threshold
 ANOMALY_THRESHOLD=0.75           # Anomaly detection threshold
@@ -280,7 +280,7 @@ LOG_LEVEL=INFO
 
 ```
 OwlSight-IDS/
-├── realtime_ids/                    # Main package
+├── src/                    # Main package
 │   ├── config/
 │   │   └── config.py                # Configuration with .env support
 │   ├── modules/
@@ -541,7 +541,7 @@ Made with ❤️ for cybersecurity research and education
 
 2. **运行完整系统**
    ```bash
-   python realtime_ids/main_realtime.py
+   python src/main_realtime.py
    ```
 
 3. **运行测试**（验证安装）
@@ -573,7 +573,7 @@ SCAPY_PACKET_TRIGGER=10       # 10 个包后触发
 SCAPY_TIME_TRIGGER=3.0        # 或 3 秒后触发
 
 # XGBoost 模型配置
-XGB_MODEL_PATH=./realtime_ids/models/xgb_model.json
+XGB_MODEL_PATH=./src/models/xgb_model.json
 XGB_THRESHOLD_HIGH=0.9        # 高危阈值
 XGB_THRESHOLD_LOW=0.5         # 低危阈值
 ANOMALY_THRESHOLD=0.75        # 异常阈值
@@ -594,7 +594,7 @@ LOG_LEVEL=INFO
 
 ```
 OwlSight-IDS/
-├── realtime_ids/                    # 主包
+├── src/                    # 主包
 │   ├── config/
 │   │   └── config.py                # 配置管理（支持 .env）
 │   ├── modules/

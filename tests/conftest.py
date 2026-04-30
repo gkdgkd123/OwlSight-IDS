@@ -234,16 +234,16 @@ def mock_redis():
 @pytest.fixture
 def redis_config():
     """标准 Redis 配置"""
-    from realtime_ids.config.config import RedisConfig
+    from src.config.config import RedisConfig
     return RedisConfig(host="localhost", port=6379, db=0, password=None, ttl=60)
 
 
 @pytest.fixture
 def xgb_config():
     """标准 XGBoost 配置"""
-    from realtime_ids.config.config import XGBoostConfig
+    from src.config.config import XGBoostConfig
     return XGBoostConfig(
-        model_path="./realtime_ids/models/xgb_model.json",
+        model_path="./src/models/xgb_model.json",
         threshold_high=0.9,
         threshold_low=0.5,
         anomaly_threshold=0.75,
@@ -253,7 +253,7 @@ def xgb_config():
 @pytest.fixture
 def llm_config():
     """标准 LLM 配置（API 模式，使用 fake key）"""
-    from realtime_ids.config.config import LLMConfig
+    from src.config.config import LLMConfig
     return LLMConfig(
         use_api=True,
         api_base_url="https://fake.api.test/v1",
@@ -265,7 +265,7 @@ def llm_config():
 @pytest.fixture
 def suricata_config(tmp_path):
     """Suricata 配置（使用临时 eve.json）"""
-    from realtime_ids.config.config import SuricataConfig
+    from src.config.config import SuricataConfig
     eve_path = tmp_path / "eve.json"
     eve_path.touch()
     return SuricataConfig(eve_json_path=str(eve_path))

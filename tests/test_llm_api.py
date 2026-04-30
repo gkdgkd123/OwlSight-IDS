@@ -8,9 +8,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import os
 import json
-from realtime_ids.config.config import RedisConfig, LLMConfig
-from realtime_ids.modules.llm_analyzer import LLMAnalyzer
-from realtime_ids.utils import generate_five_tuple_key
+from src.config.config import RedisConfig, LLMConfig
+from src.modules.llm_analyzer import LLMAnalyzer
+from src.utils import generate_five_tuple_key
 
 
 def test_llm_api():

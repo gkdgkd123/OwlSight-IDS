@@ -16,7 +16,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
 import pickle
 
-from realtime_ids.utils import generate_five_tuple_key
+from src.utils import generate_five_tuple_key
 
 
 class FlowFeatureExtractor:
@@ -264,7 +264,7 @@ def generate_synthetic_malicious_samples(features_df):
     return combined_df
 
 
-def train_xgboost_model(features_df, output_dir='realtime_ids/models'):
+def train_xgboost_model(features_df, output_dir='src/models'):
     """训练 XGBoost 模型"""
 
     # 选择特征列
@@ -278,6 +278,12 @@ def train_xgboost_model(features_df, output_dir='realtime_ids/models'):
 
     X = features_df[feature_cols].fillna(0)
     y = features_df['label']
+
+    # 检查标签是否包含两个类别
+    unique_labels = y.unique()
+    if len(unique_labels) < 2:
+        print(f"[ERROR] 标签只有 {unique_labels} 一个类别，无法训练二分类模型")
+        return None, feature_cols, 0.0
 
     # 划分训练集和测试集
     X_train, X_test, y_train, y_test = train_test_split(
@@ -313,10 +319,12 @@ def train_xgboost_model(features_df, output_dir='realtime_ids/models'):
     model = xgb.train(
         params,
         dtrain,
-        num_boost_round=100,
+        num_boost_round=200,
         evals=evals,
-        early_stopping_rounds=10,
-        verbose_eval=10
+        callbacks=[
+            xgb.callback.EvaluationMonitor(period=10),
+            xgb.callback.EarlyStopping(rounds=10, save_best=True),
+        ],
     )
 
     # 预测
@@ -388,37 +396,91 @@ def train_xgboost_model(features_df, output_dir='realtime_ids/models'):
     return model, feature_cols, auc_score
 
 
+def load_from_csv(csv_file):
+    """从预处理好的 CSV 加载训练数据"""
+    print(f"[INFO] 从 CSV 加载训练数据: {csv_file}")
+
+    df = pd.read_csv(csv_file)
+    print(f"[INFO] 数据集大小: {len(df)} 样本")
+    print(f"[INFO] 列: {list(df.columns)}")
+
+    # 检查必要的特征列
+    required_features = [
+        'packet_count', 'bytes_sent', 'duration',
+        'iat_mean', 'iat_std', 'iat_min', 'iat_max',
+        'pkt_len_mean', 'pkt_len_std', 'pkt_len_min', 'pkt_len_max',
+        'tcp_flags_count', 'syn_count', 'ack_count', 'fin_count', 'rst_count',
+        'bytes_per_second', 'packets_per_second'
+    ]
+
+    missing = [col for col in required_features if col not in df.columns]
+    if missing:
+        print(f"[ERROR] 缺失特征列: {missing}")
+        return None
+
+    if 'label' not in df.columns:
+        print("[ERROR] 缺失 label 列")
+        return None
+
+    # 标签二分类化（如果是字符串 BENIGN/攻击类型）
+    if df['label'].dtype == object:
+        df['label'] = df['label'].apply(lambda x: 0 if str(x).strip().upper() == 'BENIGN' else 1)
+
+    # 如果没有 flow_key 列，自动生成
+    if 'flow_key' not in df.columns:
+        df['flow_key'] = [f"flow_{i}" for i in range(len(df))]
+
+    print(f"\n[INFO] 数据集统计:")
+    print(f"  总流量数: {len(df)}")
+    print(f"  恶意流量: {df['label'].sum()} ({df['label'].sum()/len(df)*100:.2f}%)")
+    print(f"  正常流量: {(df['label']==0).sum()} ({(df['label']==0).sum()/len(df)*100:.2f}%)")
+
+    return df
+
+
 def main():
     """主函数"""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="XGBoost 模型训练")
+    parser.add_argument("--data", help="预处理好的 CSV 文件路径（18维特征 + label）")
+    parser.add_argument("--pcap", default="data/test.pcap", help="PCAP 文件路径（与 --eve-json 配合使用）")
+    parser.add_argument("--eve-json", default="data/eve.json", help="Suricata eve.json 路径")
+    parser.add_argument("--output", default="src/models", help="模型输出目录")
+    args = parser.parse_args()
+
     print("="*60)
-    print("SemFlow-IDS XGBoost 模型训练")
+    print("OwlSight-IDS XGBoost 模型训练")
     print("="*60)
 
-    # 数据文件路径
-    pcap_file = "data/test.pcap"
-    eve_json_file = "data/eve.json"
+    if args.data:
+        # 从预处理 CSV 加载
+        if not Path(args.data).exists():
+            print(f"[ERROR] CSV 文件不存在: {args.data}")
+            return
+        features_df = load_from_csv(args.data)
+    else:
+        # 从 pcap + eve.json 提取
+        if not Path(args.pcap).exists():
+            print(f"[ERROR] PCAP 文件不存在: {args.pcap}")
+            return
+        if not Path(args.eve_json).exists():
+            print(f"[ERROR] Suricata 日志不存在: {args.eve_json}")
+            return
+        features_df = prepare_training_data(args.pcap, args.eve_json)
 
-    # 检查文件是否存在
-    if not Path(pcap_file).exists():
-        print(f"[ERROR] PCAP 文件不存在: {pcap_file}")
+    if features_df is None:
         return
-
-    if not Path(eve_json_file).exists():
-        print(f"[ERROR] Suricata 日志不存在: {eve_json_file}")
-        return
-
-    # 准备训练数据
-    features_df = prepare_training_data(pcap_file, eve_json_file)
 
     # 训练模型
-    model, feature_cols, auc_score = train_xgboost_model(features_df)
+    model, feature_cols, auc_score = train_xgboost_model(features_df, output_dir=args.output)
 
     print("\n" + "="*60)
     print("训练完成!")
     print("="*60)
     print(f"模型 AUC: {auc_score:.4f}")
     print(f"特征数量: {len(feature_cols)}")
-    print(f"模型文件: realtime_ids/models/xgb_model.json")
+    print(f"模型文件: {args.output}/xgb_model.json")
 
 
 if __name__ == "__main__":

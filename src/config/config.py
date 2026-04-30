@@ -94,6 +94,7 @@ class SuricataConfig:
 @dataclass
 class ScapyConfig:
     interface: str = "eth0"
+    pcap_file: str = ""  # 如果设置，从 pcap 文件回放而不是实时捕获
     packet_trigger: int = 10
     time_trigger: float = 3.0
     bpf_filter: str = ""
@@ -101,7 +102,7 @@ class ScapyConfig:
 
 @dataclass
 class XGBoostConfig:
-    model_path: str = "./realtime_ids/models/xgb_model.json"
+    model_path: str = "./src/models/xgb_model.json"
     threshold_high: float = 0.9
     threshold_low: float = 0.5
     anomaly_threshold: float = 0.75
@@ -117,7 +118,7 @@ class LLMConfig:
 
     # 本地模型配置（use_api=False 时使用）
     model_path: str = "./models/Qwen-3B"
-    vector_db_path: str = "./realtime_ids/models/vector_db"
+    vector_db_path: str = "./src/models/vector_db"
     use_rag: bool = False  # API 模式下不使用 RAG
     max_length: int = 512
 
@@ -194,7 +195,7 @@ class SystemConfig:
                 bpf_filter=os.getenv("SCAPY_BPF_FILTER", ""),
             ),
             xgboost=XGBoostConfig(
-                model_path=os.getenv("XGB_MODEL_PATH", "./realtime_ids/models/xgb_model.json"),
+                model_path=os.getenv("XGB_MODEL_PATH", "./src/models/xgb_model.json"),
                 threshold_high=_safe_float("XGB_THRESHOLD_HIGH", 0.9),
                 threshold_low=_safe_float("XGB_THRESHOLD_LOW", 0.5),
                 anomaly_threshold=_safe_float("ANOMALY_THRESHOLD", 0.75),
@@ -204,7 +205,7 @@ class SystemConfig:
                 api_base_url=os.getenv("LLM_API_BASE_URL", "https://new.timefiles.online/v1"),
                 api_model=os.getenv("LLM_API_MODEL", "claude-opus-4-6"),
                 model_path=os.getenv("LLM_MODEL_PATH", "./models/Qwen-3B"),
-                vector_db_path=os.getenv("LLM_VECTOR_DB_PATH", "./realtime_ids/models/vector_db"),
+                vector_db_path=os.getenv("LLM_VECTOR_DB_PATH", "./src/models/vector_db"),
                 use_rag=os.getenv("LLM_USE_RAG", "false").lower() == "true",
                 max_length=_safe_int("LLM_MAX_LENGTH", 512),
                 # api_key 由 LLMConfig.__post_init__ 自动从环境变量读取

@@ -13,11 +13,11 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 from tests.conftest import MockRedis
-from realtime_ids.config.config import RedisConfig, SuricataConfig, XGBoostConfig, LLMConfig
-from realtime_ids.modules.suricata_monitor import SuricataMonitor
-from realtime_ids.modules.intelligent_router import IntelligentRouter
-from realtime_ids.modules.llm_analyzer import LLMAnalyzer
-from realtime_ids.utils import generate_five_tuple_key
+from src.config.config import RedisConfig, SuricataConfig, XGBoostConfig, LLMConfig
+from src.modules.suricata_monitor import SuricataMonitor
+from src.modules.intelligent_router import IntelligentRouter
+from src.modules.llm_analyzer import LLMAnalyzer
+from src.utils import generate_five_tuple_key
 
 
 # ---------------------------------------------------------------------------
@@ -50,7 +50,7 @@ def llm_cfg():
 @pytest.fixture
 def suricata_monitor(shared_redis, redis_cfg):
     """SuricataMonitor with MockRedis"""
-    with patch("realtime_ids.modules.suricata_monitor.RedisConnectionFactory") as f:
+    with patch("src.modules.suricata_monitor.RedisConnectionFactory") as f:
         f.get_client_with_retry.return_value = shared_redis
         cfg = SuricataConfig(eve_json_path=str(EVE_JSON_PATH))
         m = SuricataMonitor(redis_cfg, cfg)
@@ -60,7 +60,7 @@ def suricata_monitor(shared_redis, redis_cfg):
 
 @pytest.fixture
 def router(shared_redis, redis_cfg, xgb_cfg):
-    with patch("realtime_ids.modules.intelligent_router.RedisConnectionFactory") as f:
+    with patch("src.modules.intelligent_router.RedisConnectionFactory") as f:
         f.get_client_with_retry.return_value = shared_redis
         r = IntelligentRouter(redis_cfg, xgb_cfg)
         r.redis_client = shared_redis
@@ -69,7 +69,7 @@ def router(shared_redis, redis_cfg, xgb_cfg):
 
 @pytest.fixture
 def analyzer(shared_redis, redis_cfg, llm_cfg):
-    with patch("realtime_ids.modules.llm_analyzer.RedisConnectionFactory") as f:
+    with patch("src.modules.llm_analyzer.RedisConnectionFactory") as f:
         f.get_client_with_retry.return_value = shared_redis
         a = LLMAnalyzer(redis_cfg, llm_cfg)
         a.redis_client = shared_redis

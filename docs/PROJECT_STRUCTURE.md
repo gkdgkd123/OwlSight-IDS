@@ -7,7 +7,7 @@ SemFlow-IDS2/
 ├── README.md               # 项目说明文档
 ├── requirements.txt        # Python 依赖列表
 │
-├── realtime_ids/           # 核心代码模块
+├── src/           # 核心代码模块
 │   ├── __init__.py
 │   ├── utils.py            # 工具函数（五元组生成、日志等）
 │   ├── main_realtime.py    # 主程序入口
@@ -47,7 +47,7 @@ SemFlow-IDS2/
 
 ## 目录说明
 
-### 核心代码 (`realtime_ids/`)
+### 核心代码 (`src/`)
 - **config/**: 系统配置（Redis、Suricata、Scapy、XGBoost、LLM）
 - **modules/**: 四大检测模块的实现
 - **main_realtime.py**: 多线程协同运行的主程序
@@ -90,7 +90,7 @@ python tests/test_pcap_analysis.py
 redis-server --port 6379
 
 # 运行主程序
-python realtime_ids/main_realtime.py \
+python src/main_realtime.py \
     --eve-json data/eve.json \
     --interface eth0 \
     --redis-host localhost

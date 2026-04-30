@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from realtime_ids.utils import generate_five_tuple_key
+from src.utils import generate_five_tuple_key
 
 
 def test_parse_eve_json(file_path: str):

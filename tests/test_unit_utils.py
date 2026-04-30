@@ -4,7 +4,7 @@
 """
 import pytest
 import logging
-from realtime_ids.utils import (
+from src.utils import (
     generate_five_tuple_key,
     parse_five_tuple_key,
     setup_logger,

@@ -5,8 +5,8 @@
 import pytest
 import time
 from unittest.mock import patch, MagicMock
-from realtime_ids.config.config import RedisConfig
-from realtime_ids.config.redis_factory import RedisConnectionFactory
+from src.config.config import RedisConfig
+from src.config.redis_factory import RedisConnectionFactory
 
 
 @pytest.fixture(autouse=True)
@@ -23,7 +23,7 @@ class TestRedisConnectionFactory:
     def test_get_client_returns_redis_instance(self):
         """get_client 应返回 Redis 实例"""
         config = RedisConfig(host="localhost", port=6379)
-        with patch("realtime_ids.config.redis_factory.ConnectionPool") as mock_pool_cls:
+        with patch("src.config.redis_factory.ConnectionPool") as mock_pool_cls:
             mock_pool = MagicMock()
             mock_pool_cls.return_value = mock_pool
             client = RedisConnectionFactory.get_client(config)
@@ -33,7 +33,7 @@ class TestRedisConnectionFactory:
     def test_pool_is_singleton(self):
         """相同配置应复用连接池"""
         config = RedisConfig(host="localhost", port=6379)
-        with patch("realtime_ids.config.redis_factory.ConnectionPool") as mock_pool_cls:
+        with patch("src.config.redis_factory.ConnectionPool") as mock_pool_cls:
             mock_pool_cls.return_value = MagicMock()
             RedisConnectionFactory.get_client(config)
             RedisConnectionFactory.get_client(config)
@@ -44,7 +44,7 @@ class TestRedisConnectionFactory:
         """配置变化时应重建连接池"""
         config1 = RedisConfig(host="host1", port=6379)
         config2 = RedisConfig(host="host2", port=6380)
-        with patch("realtime_ids.config.redis_factory.ConnectionPool") as mock_pool_cls:
+        with patch("src.config.redis_factory.ConnectionPool") as mock_pool_cls:
             mock_pool_cls.return_value = MagicMock()
             RedisConnectionFactory.get_client(config1)
             RedisConnectionFactory.get_client(config2)
@@ -95,7 +95,7 @@ class TestRedisConnectionFactory:
     def test_get_dedicated_client(self):
         """独立连接不共享连接池"""
         config = RedisConfig(host="localhost", port=6379)
-        with patch("realtime_ids.config.redis_factory.redis.Redis") as mock_redis_cls:
+        with patch("src.config.redis_factory.redis.Redis") as mock_redis_cls:
             mock_redis_cls.return_value = MagicMock()
             client = RedisConnectionFactory.get_dedicated_client(config)
             assert client is not None
@@ -107,7 +107,7 @@ class TestRedisConnectionFactory:
     def test_reset_pool(self):
         """reset_pool 应清除单例"""
         config = RedisConfig(host="localhost", port=6379)
-        with patch("realtime_ids.config.redis_factory.ConnectionPool") as mock_pool_cls:
+        with patch("src.config.redis_factory.ConnectionPool") as mock_pool_cls:
             mock_pool = MagicMock()
             mock_pool_cls.return_value = mock_pool
             RedisConnectionFactory.get_client(config)

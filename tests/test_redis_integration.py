@@ -9,10 +9,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import time
 import json
 import redis
-from realtime_ids.config.config import RedisConfig, XGBoostConfig
-from realtime_ids.modules.early_flow_xgb import FlowStatistics, DualModelInference
-from realtime_ids.modules.intelligent_router import IntelligentRouter
-from realtime_ids.utils import generate_five_tuple_key, setup_logger
+from src.config.config import RedisConfig, XGBoostConfig
+from src.modules.early_flow_xgb import FlowStatistics, DualModelInference
+from src.modules.intelligent_router import IntelligentRouter
+from src.utils import generate_five_tuple_key, setup_logger
 
 
 def test_redis_connection():
@@ -38,7 +38,7 @@ def test_dual_model_with_redis():
     print("=" * 80)
 
     redis_cfg = RedisConfig(host="localhost", port=6379)
-    xgb_cfg = XGBoostConfig(model_path="./realtime_ids/models/xgb_model.json")
+    xgb_cfg = XGBoostConfig(model_path="./src/models/xgb_model.json")
 
     redis_client = redis.Redis(
         host=redis_cfg.host,
@@ -300,8 +300,8 @@ def main():
     if test1_passed and test3_passed:
         print("\n[SUCCESS] 所有测试通过！")
         print("\n双模型协同检测系统已就绪:")
-        print("  - XGBoost 模型: realtime_ids/models/xgb_model.json")
-        print("  - Isolation Forest 模型: realtime_ids/models/iforest_model.pkl")
+        print("  - XGBoost 模型: src/models/xgb_model.json")
+        print("  - Isolation Forest 模型: src/models/iforest_model.pkl")
         print("  - Redis 连接: localhost:6379")
         print("\n可以启动完整的实时检测系统了！")
     else:

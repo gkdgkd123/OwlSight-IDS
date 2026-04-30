@@ -13,8 +13,8 @@ import numpy as np
 from collections import defaultdict
 
 # 导入项目模块
-from realtime_ids.utils import generate_five_tuple_key
-from realtime_ids.modules.early_flow_xgb import FlowStatistics
+from src.utils import generate_five_tuple_key
+from src.modules.early_flow_xgb import FlowStatistics
 
 
 class MockRedis:

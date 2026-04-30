@@ -99,6 +99,8 @@ class DualModelInference:
         # 加载模型
         self.xgb_model = self._load_xgb_model()
         self.iforest_model = self._load_iforest_model()
+        self.iforest_scaler = self._load_iforest_scaler()
+        self.anomaly_percentiles = self._load_anomaly_percentiles()
 
     def _load_xgb_model(self):
         """加载 XGBoost 模型"""
@@ -134,6 +136,44 @@ class DualModelInference:
                 return None
         except Exception as e:
             self.logger.error(f"加载 Isolation Forest 模型失败: {e}")
+            return None
+
+    def _load_iforest_scaler(self):
+        """加载 Isolation Forest 特征标准化器"""
+        try:
+            import pickle
+            scaler_path = Path(self.xgb_config.model_path).parent / 'scaler.pkl'
+
+            if scaler_path.exists():
+                with open(scaler_path, 'rb') as f:
+                    scaler = pickle.load(f)
+                self.logger.info(f"Scaler 加载成功: {scaler_path}")
+                return scaler
+            else:
+                self.logger.warning(f"Scaler 文件不存在: {scaler_path}，跳过标准化")
+                return None
+        except Exception as e:
+            self.logger.error(f"加载 Scaler 失败: {e}")
+            return None
+
+    def _load_anomaly_percentiles(self):
+        """加载训练集异常分数分布（用于运行时归一化）"""
+        try:
+            import json as _json
+            info_path = Path(self.xgb_config.model_path).parent / 'iforest_info.json'
+
+            if info_path.exists():
+                with open(info_path, 'r') as f:
+                    info = _json.load(f)
+                percentiles = info.get('anomaly_score_percentiles')
+                if percentiles:
+                    self.logger.info(f"异常分数分位数加载成功: {percentiles}")
+                    return percentiles
+                else:
+                    self.logger.warning("iforest_info.json 中无 anomaly_score_percentiles 字段")
+            return None
+        except Exception as e:
+            self.logger.error(f"加载异常分数分位数失败: {e}")
             return None
 
     def predict(self, features: Dict[str, float]) -> Dict[str, float]:
@@ -180,13 +220,31 @@ class DualModelInference:
             return self._heuristic_iforest(feature_vector)
 
         try:
-            # Isolation Forest 返回 -1 (异常) 或 1 (正常)
-            # decision_function 返回异常分数（越负越异常）
-            anomaly_score_raw = self.iforest_model.decision_function([feature_vector])[0]
+            # 标准化特征（训练时用了 StandardScaler，推理必须一致）
+            if self.iforest_scaler is not None:
+                scaled_vector = self.iforest_scaler.transform([feature_vector])[0]
+            else:
+                scaled_vector = feature_vector
 
-            # 归一化到 0-1 范围（0=正常，1=极度异常）
-            # decision_function 通常在 [-0.5, 0.5] 范围
-            anomaly_score = max(0.0, min(1.0, -anomaly_score_raw + 0.5))
+            # decision_function 返回异常分数（越负越异常）
+            anomaly_score_raw = self.iforest_model.decision_function([scaled_vector])[0]
+
+            # 动态归一化到 0-1（基于训练集分布）
+            if self.anomaly_percentiles:
+                p5 = self.anomaly_percentiles.get('p5', -0.3)
+                p95 = self.anomaly_percentiles.get('p95', 0.1)
+                # 越负越异常 → 取反后线性映射到 [0, 1]
+                inverted = -anomaly_score_raw
+                inverted_p5 = -p95   # p95 是最"正常"的一端，取反后变成最小值
+                inverted_p95 = -p5   # p5 是最"异常"的一端，取反后变成最大值
+                if inverted_p95 > inverted_p5:
+                    anomaly_score = (inverted - inverted_p5) / (inverted_p95 - inverted_p5)
+                else:
+                    anomaly_score = 0.5
+                anomaly_score = max(0.0, min(1.0, anomaly_score))
+            else:
+                # 旧模型兼容：使用固定偏移
+                anomaly_score = max(0.0, min(1.0, -anomaly_score_raw + 0.5))
 
             return anomaly_score
         except Exception as e:
@@ -455,21 +513,56 @@ class EarlyFlowDualModel:
         self.alert_listener_thread.start()
         self.logger.info("Suricata 报警监听线程已启动")
 
-        self.logger.info(f"开始监听网卡: {self.scapy_config.interface}")
+        # 判断是 pcap 回放还是实时捕获
+        if self.scapy_config.pcap_file:
+            self.logger.info(f"开始回放 pcap 文件: {self.scapy_config.pcap_file}")
+            try:
+                sniff(
+                    offline=self.scapy_config.pcap_file,
+                    prn=self._packet_handler,
+                    store=False
+                )
+                # pcap 回放完成后，处理剩余的流
+                self.logger.info("pcap 回放完成，处理剩余未触发的流...")
+                self._flush_remaining_flows()
+            except Exception as e:
+                self.logger.error(f"pcap 回放异常: {e}")
+            finally:
+                self.stop()
+        else:
+            self.logger.info(f"开始监听网卡: {self.scapy_config.interface}")
+            try:
+                sniff(
+                    iface=self.scapy_config.interface,
+                    prn=self._packet_handler,
+                    filter=self.scapy_config.bpf_filter if self.scapy_config.bpf_filter else None,
+                    store=False
+                )
+            except KeyboardInterrupt:
+                self.logger.info("收到中断信号，停止抓包")
+            except Exception as e:
+                self.logger.error(f"抓包异常: {e}")
+            finally:
+                self.stop()
 
-        try:
-            sniff(
-                iface=self.scapy_config.interface,
-                prn=self._packet_handler,
-                filter=self.scapy_config.bpf_filter if self.scapy_config.bpf_filter else None,
-                store=False
-            )
-        except KeyboardInterrupt:
-            self.logger.info("收到中断信号，停止抓包")
-        except Exception as e:
-            self.logger.error(f"抓包异常: {e}")
-        finally:
-            self.stop()
+    def _flush_remaining_flows(self):
+        """pcap 回放完成后，处理所有剩余未触发的流"""
+        with self.lock:
+            remaining = [
+                (flow_key, flow_stats)
+                for flow_key, flow_stats in self.active_flows.items()
+                if not flow_stats.already_inferred and flow_stats.packet_count > 0
+            ]
+
+        self.logger.info(f"发现 {len(remaining)} 个未处理的流，正在处理...")
+
+        for flow_key, flow_stats in remaining:
+            try:
+                self._process_flow(flow_key, flow_stats)
+            except Exception as e:
+                self.logger.error(f"处理剩余流失败 {flow_key}: {e}")
+
+        self.logger.info("所有剩余流处理完成")
 
     def stop(self):
         """停止模块"""
@@ -501,7 +594,7 @@ if __name__ == "__main__":
 
     redis_cfg = RedisConfig(host="localhost", port=6379)
     scapy_cfg = ScapyConfig(interface="eth0", packet_trigger=10, time_trigger=3.0)
-    xgb_cfg = XGBoostConfig(model_path="./realtime_ids/models/xgb_model.json")
+    xgb_cfg = XGBoostConfig(model_path="./src/models/xgb_model.json")
 
     module = EarlyFlowDualModel(redis_cfg, scapy_cfg, xgb_cfg)
 

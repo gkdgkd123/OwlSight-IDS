@@ -12,9 +12,9 @@ import json
 import time
 from unittest.mock import patch, MagicMock
 from tests.conftest import MockRedis, MockPipeline
-from realtime_ids.config.config import RedisConfig, XGBoostConfig, LLMConfig
-from realtime_ids.modules.intelligent_router import IntelligentRouter
-from realtime_ids.modules.llm_analyzer import LLMAnalyzer
+from src.config.config import RedisConfig, XGBoostConfig, LLMConfig
+from src.modules.intelligent_router import IntelligentRouter
+from src.modules.llm_analyzer import LLMAnalyzer
 
 
 # ---------------------------------------------------------------------------
@@ -44,7 +44,7 @@ def llm_cfg():
 
 @pytest.fixture
 def router(shared_redis, redis_cfg, xgb_cfg):
-    with patch("realtime_ids.modules.intelligent_router.RedisConnectionFactory") as f:
+    with patch("src.modules.intelligent_router.RedisConnectionFactory") as f:
         f.get_client_with_retry.return_value = shared_redis
         r = IntelligentRouter(redis_cfg, xgb_cfg)
         r.redis_client = shared_redis
@@ -53,7 +53,7 @@ def router(shared_redis, redis_cfg, xgb_cfg):
 
 @pytest.fixture
 def analyzer(shared_redis, redis_cfg, llm_cfg):
-    with patch("realtime_ids.modules.llm_analyzer.RedisConnectionFactory") as f:
+    with patch("src.modules.llm_analyzer.RedisConnectionFactory") as f:
         f.get_client_with_retry.return_value = shared_redis
         a = LLMAnalyzer(redis_cfg, llm_cfg)
         a.redis_client = shared_redis

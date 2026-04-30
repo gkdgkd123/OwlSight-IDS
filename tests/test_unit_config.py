@@ -5,7 +5,7 @@
 import os
 import pytest
 from unittest.mock import patch
-from realtime_ids.config.config import (
+from src.config.config import (
     RedisConfig,
     SuricataConfig,
     ScapyConfig,

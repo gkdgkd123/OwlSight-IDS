@@ -10,12 +10,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from realtime_ids.config.config import SystemConfig
-from realtime_ids.modules.suricata_monitor import SuricataMonitor
-from realtime_ids.modules.early_flow_xgb import EarlyFlowDualModel
-from realtime_ids.modules.intelligent_router import IntelligentRouter
-from realtime_ids.modules.llm_analyzer import LLMAnalyzer
-from realtime_ids.utils import setup_logger
+from src.config.config import SystemConfig
+from src.modules.suricata_monitor import SuricataMonitor
+from src.modules.early_flow_xgb import EarlyFlowDualModel
+from src.modules.intelligent_router import IntelligentRouter
+from src.modules.llm_analyzer import LLMAnalyzer
+from src.utils import setup_logger
 
 
 class SemFlowIDS:
@@ -148,7 +148,7 @@ def parse_args():
     parser.add_argument(
         "--xgb-model",
         type=str,
-        default="./realtime_ids/models/xgb_model.json",
+        default="./src/models/xgb_model.json",
         help="XGBoost 模型路径"
     )
     

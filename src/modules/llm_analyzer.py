@@ -331,18 +331,25 @@ JSON 输出："""
                     }
                 ],
                 "temperature": 0.3,
-                "max_tokens": 1024
+                "max_tokens": 4096
             }
 
             # 发送请求
             response = requests.post(url, headers=headers, json=payload, timeout=30)
             response.raise_for_status()
 
-            # 解析响应
+            # 解析响应（兼容推理模型：content 可能在 reasoning_content 中）
             response_data = response.json()
-            content = response_data["choices"][0]["message"]["content"]
+            message = response_data["choices"][0]["message"]
+            content = message.get("content", "") or ""
+            reasoning = message.get("reasoning_content", "") or ""
 
-            self.logger.info(f"LLM API 响应成功，长度: {len(content)}")
+            if not content and reasoning:
+                # 推理模型将结果放在 reasoning_content 中
+                content = reasoning
+                self.logger.info(f"LLM API 响应成功（推理模型），内容长度: {len(content)}")
+            else:
+                self.logger.info(f"LLM API 响应成功，内容长度: {len(content)}")
 
             # 解析 JSON
             json_start = content.find("{")

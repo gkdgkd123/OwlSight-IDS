@@ -8,9 +8,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from realtime_ids.modules.suricata_monitor import SuricataMonitor
-from realtime_ids.config.config import RedisConfig, SuricataConfig
-from realtime_ids.utils import generate_five_tuple_key
+from src.modules.suricata_monitor import SuricataMonitor
+from src.config.config import RedisConfig, SuricataConfig
+from src.utils import generate_five_tuple_key
 
 
 def test_parse_eve_json(file_path: str):

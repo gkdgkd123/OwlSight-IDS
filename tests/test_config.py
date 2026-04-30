@@ -7,7 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import os
-from realtime_ids.config.config import (
+from src.config.config import (
     RedisConfig, SuricataConfig, ScapyConfig,
     XGBoostConfig, LLMConfig, SystemConfig
 )

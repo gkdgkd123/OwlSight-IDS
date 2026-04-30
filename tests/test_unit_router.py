@@ -5,15 +5,15 @@
 import pytest
 import json
 from unittest.mock import patch
-from realtime_ids.modules.intelligent_router import IntelligentRouter
-from realtime_ids.config.config import RedisConfig, XGBoostConfig
+from src.modules.intelligent_router import IntelligentRouter
+from src.config.config import RedisConfig, XGBoostConfig
 
 
 @pytest.fixture
 def router(mock_redis, redis_config, xgb_config):
     """创建使用 MockRedis 的 IntelligentRouter"""
     with patch(
-        "realtime_ids.modules.intelligent_router.RedisConnectionFactory"
+        "src.modules.intelligent_router.RedisConnectionFactory"
     ) as mock_factory:
         mock_factory.get_client_with_retry.return_value = mock_redis
         r = IntelligentRouter(redis_config, xgb_config)

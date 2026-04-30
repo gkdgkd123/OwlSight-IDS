@@ -9,10 +9,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import json
 import time
 import numpy as np
-from realtime_ids.utils import generate_five_tuple_key
-from realtime_ids.config.config import RedisConfig, XGBoostConfig
-from realtime_ids.modules.early_flow_xgb import FlowStatistics, DualModelInference
-from realtime_ids.modules.intelligent_router import IntelligentRouter
+from src.utils import generate_five_tuple_key
+from src.config.config import RedisConfig, XGBoostConfig
+from src.modules.early_flow_xgb import FlowStatistics, DualModelInference
+from src.modules.intelligent_router import IntelligentRouter
 
 
 from tests.conftest import MockRedis
@@ -24,10 +24,10 @@ def test_dual_model_inference():
     print("测试 1: 双模型推理引擎")
     print("=" * 80)
 
-    xgb_cfg = XGBoostConfig(model_path="./realtime_ids/models/xgb_model.json")
+    xgb_cfg = XGBoostConfig(model_path="./src/models/xgb_model.json")
 
     # 创建推理引擎
-    from realtime_ids.utils import setup_logger
+    from src.utils import setup_logger
     logger = setup_logger("Test")
     dual_model = DualModelInference(xgb_cfg, logger)
 
@@ -131,7 +131,7 @@ def test_intelligent_router():
     # 创建路由器
     from unittest.mock import patch as mock_patch
     with mock_patch(
-        "realtime_ids.modules.intelligent_router.RedisConnectionFactory"
+        "src.modules.intelligent_router.RedisConnectionFactory"
     ) as mock_factory:
         mock_factory.get_client_with_retry.return_value = mock_redis
         router = IntelligentRouter(redis_cfg, xgb_cfg)
@@ -309,8 +309,8 @@ def test_end_to_end():
         }
     ]
 
-    xgb_cfg = XGBoostConfig(model_path="./realtime_ids/models/xgb_model.json")
-    from realtime_ids.utils import setup_logger
+    xgb_cfg = XGBoostConfig(model_path="./src/models/xgb_model.json")
+    from src.utils import setup_logger
     logger = setup_logger("E2E-Test")
     dual_model = DualModelInference(xgb_cfg, logger)
 
@@ -387,9 +387,9 @@ def main():
     if all_passed:
         print("[SUCCESS] 所有测试通过！")
         print("\n双模型协同检测架构已就绪:")
-        print("  - XGBoost 模型: realtime_ids/models/xgb_model.json")
-        print("  - Isolation Forest 模型: realtime_ids/models/iforest_model.pkl")
-        print("  - 特征标准化器: realtime_ids/models/scaler.pkl")
+        print("  - XGBoost 模型: src/models/xgb_model.json")
+        print("  - Isolation Forest 模型: src/models/iforest_model.pkl")
+        print("  - 特征标准化器: src/models/scaler.pkl")
         print("\n可以启动实时检测系统了！")
     else:
         print("[FAILED] 部分测试失败，请检查日志")

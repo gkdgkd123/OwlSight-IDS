@@ -19,6 +19,12 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 import sys
+import io
+
+# 修复 Windows 终端编码问题
+if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # 添加项目路径
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))

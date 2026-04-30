@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import os
 import tempfile
-from realtime_ids.config.config import SystemConfig, load_env_file
+from src.config.config import SystemConfig, load_env_file
 
 
 def test_env_file_loading():
