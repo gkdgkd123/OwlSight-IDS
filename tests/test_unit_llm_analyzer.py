@@ -88,19 +88,17 @@ class TestBuildPrompt:
         prompt = analyzer._build_prompt(
             "流量特征正常", xgb_score=0.35, anomaly_score=0.88, decision_type="ZERODAY_HUNT"
         )
-        assert "0day" in prompt or "未知变种" in prompt
+        assert "0day" in prompt or "unknown" in prompt.lower()
         assert "0.35" in prompt  # XGB 分数
         assert "0.88" in prompt  # Anomaly 分数
-        assert "JSON" in prompt
 
     def test_llm_analyze_prompt(self, analyzer):
         """LLM_ANALYZE 应包含灰色地带上下文"""
         prompt = analyzer._build_prompt(
             "流量特征正常", xgb_score=0.7, anomaly_score=0.5, decision_type="LLM_ANALYZE"
         )
-        assert "灰色地带" in prompt
+        assert "gray zone" in prompt or "灰色地带" in prompt
         assert "0.7" in prompt
-        assert "JSON" in prompt
 
     def test_prompt_includes_features_text(self, analyzer):
         """Prompt 应包含特征文本"""

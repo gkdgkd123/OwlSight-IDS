@@ -14,11 +14,15 @@ import redis
 import os
 import time
 import threading
+from string import Template
 from typing import Dict, Any, Optional
 from pathlib import Path
 from ..utils import sanitize_text, setup_logger
 from ..config.config import RedisConfig, LLMConfig
 from ..config.redis_factory import RedisConnectionFactory
+
+# Prompt 模板路径
+PROMPT_TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "prompts" / "llm_analyst.md"
 
 
 class LLMAnalyzer:
@@ -30,6 +34,9 @@ class LLMAnalyzer:
         self.logger = setup_logger("LLMAnalyzer")
 
         self.redis_client = RedisConnectionFactory.get_client_with_retry(redis_config)
+
+        # 加载 Prompt 模板
+        self.prompt_template = self._load_prompt_template()
 
         self.running = False
         self.llm_queue_name = "llm_task_queue"
@@ -135,6 +142,19 @@ class LLMAnalyzer:
         self.logger.info("API 配置初始化成功")
         return True  # 返回 True 表示配置成功
 
+    def _load_prompt_template(self) -> Optional[Template]:
+        """加载 Prompt 模板文件（使用 $variable 语法，避免与 JSON 花括号冲突）"""
+        try:
+            if not PROMPT_TEMPLATE_PATH.exists():
+                self.logger.warning(f"Prompt 模板不存在: {PROMPT_TEMPLATE_PATH}，使用内置默认 Prompt")
+                return None
+            content = PROMPT_TEMPLATE_PATH.read_text(encoding="utf-8")
+            self.logger.info(f"Prompt 模板加载成功: {PROMPT_TEMPLATE_PATH}")
+            return Template(content)
+        except Exception as e:
+            self.logger.error(f"加载 Prompt 模板失败: {e}")
+            return None
+
     def _load_local_model(self):
         """加载本地 Qwen 模型"""
         try:
@@ -232,8 +252,25 @@ class LLMAnalyzer:
 
         # TCP 特征分析
         syn_count = features.get("syn_count", 0)
+        ack_count = features.get("ack_count", 0)
+        fin_count = features.get("fin_count", 0)
+        rst_count = features.get("rst_count", 0)
+
         if syn_count > 5 and syn_count == packet_count:
             descriptions.append(f"全部为 SYN 包（{syn_count} 个），典型的端口扫描特征")
+        elif syn_count > 0 and ack_count == 0:
+            descriptions.append(f"有 {syn_count} 个 SYN 包但无 ACK 响应，TCP 三次握手未完成")
+        elif syn_count > 0 and ack_count > 0:
+            descriptions.append(f"完整的 TCP 握手（SYN={syn_count}, ACK={ack_count}），连接已建立")
+
+        if rst_count > 0:
+            descriptions.append(f"存在 {rst_count} 个 RST 包，连接被重置")
+        if fin_count > 0:
+            descriptions.append(f"存在 {fin_count} 个 FIN 包，连接正常关闭")
+
+        is_early_flow = (fin_count == 0 and rst_count == 0 and packet_count < 10)
+        if is_early_flow:
+            descriptions.append("连接尚未关闭（无 FIN/RST）且包数较少，属于早期流，结果可能不完整")
 
         # 速率特征分析
         packets_per_second = features.get("packets_per_second", 0)
@@ -243,58 +280,45 @@ class LLMAnalyzer:
         return "；".join(descriptions) if descriptions else "流量特征正常"
 
     def _build_prompt(self, features_text: str, xgb_score: float, anomaly_score: float, decision_type: str) -> str:
-        """构建 LLM Prompt"""
+        """构建 LLM Prompt（优先使用外部模板，回退到内置默认）"""
 
-        # 根据决策类型调整 Prompt
+        # 构建上下文描述
         if decision_type == "ZERODAY_HUNT":
-            context = f"""
-【检测背景】
-本系统采用双模型协同检测架构：
-- XGBoost（监督学习）：基于已知攻击模式训练，得分 {xgb_score:.3f}（< 0.5 认为安全）
-- Isolation Forest（无监督学习）：基于统计异常检测，得分 {anomaly_score:.3f}（> 0.75 极度异常）
-
-【关键发现】
-XGBoost 认为该流量安全，但 Isolation Forest 检测到极度异常的行为模式。
-这种矛盾表明：该流量可能是**未知变种攻击或 0day 威胁**，其行为模式不在已知攻击训练集中，但统计特征显著偏离正常流量。
-"""
+            context = (
+                f"**Detection Source**: ML Alert Only (no Suricata)\n"
+                f"- XGBoost score: {xgb_score:.3f} (< 0.5, model considers SAFE)\n"
+                f"- Isolation Forest anomaly score: {anomaly_score:.3f} (> 0.75, EXTREMELY anomalous)\n\n"
+                f"**Key Finding**: XGBoost considers this flow safe, but Isolation Forest detected "
+                f"an extremely anomalous behavioral pattern. This contradiction suggests a possible "
+                f"**unknown variant attack or 0day threat** — the behavior is not in known attack training "
+                f"sets, but the statistical features significantly deviate from normal traffic."
+            )
         else:
-            context = f"""
-【检测背景】
-本系统采用双模型协同检测架构：
-- XGBoost 得分: {xgb_score:.3f}（0.5-0.9 灰色地带，需要深度研判）
-- Isolation Forest 得分: {anomaly_score:.3f}（异常程度）
+            context = (
+                f"**Detection Source**: ML Alert Only (no Suricata)\n"
+                f"- XGBoost score: {xgb_score:.3f} (0.5-0.9 gray zone, needs deep analysis)\n"
+                f"- Isolation Forest anomaly score: {anomaly_score:.3f}\n\n"
+                f"**Key Finding**: This flow is in the gray zone — neither clearly malicious nor "
+                f"clearly normal. Requires semantic deep analysis."
+            )
 
-【关键发现】
-该流量处于灰色地带，既不是明显的恶意流量，也不是完全正常的流量，需要结合语义特征进行深度分析。
-"""
+        # 优先使用外部模板
+        if self.prompt_template is not None:
+            return self.prompt_template.substitute(
+                context=context,
+                features_text=features_text,
+            )
 
+        # 回退到内置默认 Prompt
         prompt = f"""你是一个专业的网络安全分析专家，擅长识别网络攻击和异常行为。
 
+【检测背景】
 {context}
 
 【流量特征分析】
 {features_text}
 
-【任务要求】
-请基于以上信息，综合判断该网络流是否为恶意攻击。
-
-分析要点：
-1. 结合 XGBoost 和 Isolation Forest 的得分，评估威胁等级
-2. 分析流量特征的异常程度和攻击指标
-3. 判断是否为已知攻击类型，或可能是未知变种
-4. 评估攻击意图和潜在危害
-
-请以严格的 JSON 格式输出，包含以下字段：
-{{
-  "is_malicious": true/false,
-  "attack_type": "攻击类型（如：Port Scanning, DoS Attack, Data Exfiltration, Slow Scan, Unknown/0day, Benign Traffic）",
-  "confidence": 0.0-1.0,
-  "reason": "详细分析过程（2-3 句话，说明判断依据）",
-  "threat_level": "威胁等级（Critical/High/Medium/Low/None）",
-  "recommended_action": "建议措施（Block/Monitor/Allow）"
-}}
-
-JSON 输出："""
+请以严格的 JSON 格式输出分析结果。"""
 
         return prompt
 
@@ -323,7 +347,7 @@ JSON 输出："""
                 "messages": [
                     {
                         "role": "system",
-                        "content": "你是一个专业的网络安全分析专家。请严格按照 JSON 格式输出分析结果。"
+                        "content": "You are OwlSight-L2, an expert cybersecurity analyst. Always respond with valid JSON only."
                     },
                     {
                         "role": "user",
@@ -407,12 +431,22 @@ JSON 输出："""
     def _dummy_result(self, reason: str) -> Dict[str, Any]:
         """返回 Dummy 结果"""
         return {
+            "reasoning": reason,
+            "verdict": "unknown",
+            "severity": "Info",
+            "threat_type": "Unknown",
+            "is_successful_attack": "unknown",
+            "success_evidence": "",
+            # 兼容旧字段
             "is_malicious": False,
             "attack_type": "Unknown",
             "confidence": 0.5,
             "reason": reason,
             "threat_level": "Unknown",
-            "recommended_action": "Monitor"
+            "recommended_action": "Monitor",
+            "key_indicators": [],
+            "mitre_techniques": [],
+            "explanation_for_non_expert": reason,
         }
 
     def _process_task(self, task_data: Dict[str, Any]) -> bool:
@@ -444,13 +478,16 @@ JSON 输出："""
                 result = self._call_local_llm(prompt)
 
             # 记录日志
+            verdict = result.get("verdict", "unknown")
+            severity = result.get("severity", "Unknown")
+            is_successful = result.get("is_successful_attack", "unknown")
             self.logger.info(
                 f"[LLM] 深度研判完成 {flow_key} | "
-                f"决策类型: {decision} | "
-                f"恶意: {result.get('is_malicious')} | "
-                f"类型: {result.get('attack_type')} | "
+                f"决策: {decision} | "
+                f"判定: {verdict} | "
+                f"严重性: {severity} | "
+                f"攻击成功: {is_successful} | "
                 f"置信度: {result.get('confidence', 0):.2f} | "
-                f"威胁等级: {result.get('threat_level')} | "
                 f"建议: {result.get('recommended_action')}"
             )
 
@@ -458,10 +495,17 @@ JSON 输出："""
             try:
                 pipe = self.redis_client.pipeline()
                 pipe.hset(flow_key, "llm_result", json.dumps(result, ensure_ascii=False))
-                pipe.hset(flow_key, "llm_is_malicious", str(result.get("is_malicious", False)))
+                # 新 schema 字段
+                pipe.hset(flow_key, "llm_verdict", str(result.get("verdict", "unknown")))
+                pipe.hset(flow_key, "llm_severity", str(result.get("severity", "Info")))
+                pipe.hset(flow_key, "llm_threat_type", str(result.get("threat_type", "Unknown")))
+                pipe.hset(flow_key, "llm_is_successful_attack", str(result.get("is_successful_attack", "unknown")))
+                # 兼容旧字段（is_malicious 由 verdict 推导）
+                is_malicious = result.get("is_malicious", verdict in ("malicious", "suspicious"))
+                pipe.hset(flow_key, "llm_is_malicious", str(is_malicious))
                 pipe.hset(flow_key, "llm_confidence", str(result.get("confidence", 0.0)))
-                pipe.hset(flow_key, "llm_attack_type", result.get("attack_type", "Unknown"))
-                pipe.hset(flow_key, "llm_threat_level", result.get("threat_level", "Unknown"))
+                pipe.hset(flow_key, "llm_attack_type", result.get("attack_type", result.get("threat_type", "Unknown")))
+                pipe.hset(flow_key, "llm_threat_level", result.get("threat_level", result.get("severity", "Unknown")))
                 pipe.expire(flow_key, 300)  # LLM 结果保留 5 分钟
                 pipe.execute()
             except Exception as e:
@@ -472,7 +516,7 @@ JSON 输出："""
             with self.stats_lock:
                 self.stats['total_processed'] += 1
                 self.stats['success'] += 1
-                if result.get('is_malicious'):
+                if is_malicious:
                     self.stats['malicious_detected'] += 1
                 else:
                     self.stats['benign_detected'] += 1
