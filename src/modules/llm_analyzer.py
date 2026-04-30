@@ -17,6 +17,7 @@ import threading
 from string import Template
 from typing import Dict, Any, Optional
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 from ..utils import sanitize_text, setup_logger
 from ..config.config import RedisConfig, LLMConfig
 from ..config.redis_factory import RedisConnectionFactory
@@ -359,7 +360,7 @@ class LLMAnalyzer:
             }
 
             # 发送请求
-            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            response = requests.post(url, headers=headers, json=payload, timeout=60)
             response.raise_for_status()
 
             # 解析响应（兼容推理模型：content 可能在 reasoning_content 中）
@@ -550,72 +551,78 @@ class LLMAnalyzer:
         self.logger.warning(f"任务重新入队 (重试 {retry_count + 1}/{max_retries}): {task_data.get('flow_key')}")
 
     def start(self):
-        """启动消费者 Worker"""
+        """启动消费者 Worker（3 并发线程）"""
         self.running = True
-        self.logger.info("LLM 消费者 Worker 启动")
+        self.logger.info("LLM 消费者 Worker 启动（3 并发）")
 
         last_health_check = time.time()
-        health_check_interval = 30.0  # 每 30 秒检查一次队列健康
+        health_check_interval = 30.0
         consecutive_errors = 0
         max_consecutive_errors = 5
+        max_workers = 3
 
         try:
-            while self.running and not self.shutdown_event.is_set():
-                try:
-                    # 定期健康检查
-                    current_time = time.time()
-                    if current_time - last_health_check >= health_check_interval:
-                        self._check_queue_health()
-                        self._print_stats()
-                        last_health_check = current_time
+            with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="LLMWorker") as executor:
+                self.logger.info(f"线程池已启动: {max_workers} 个 Worker")
 
-                    # BRPOP 阻塞消费（超时 1 秒，避免无法响应停机信号）
-                    result = self.redis_client.brpop(self.llm_queue_name, timeout=1)
-                    consecutive_errors = 0  # 成功则重置
+                while self.running and not self.shutdown_event.is_set():
+                    try:
+                        # 定期健康检查
+                        current_time = time.time()
+                        if current_time - last_health_check >= health_check_interval:
+                            self._check_queue_health()
+                            self._print_stats()
+                            last_health_check = current_time
 
-                    if result is None:
-                        continue  # 超时，继续循环
+                        # BRPOP 阻塞消费
+                        result = self.redis_client.brpop(self.llm_queue_name, timeout=1)
+                        consecutive_errors = 0
 
-                    queue_name, task_json = result
-                    task_data = json.loads(task_json)
+                        if result is None:
+                            continue
 
-                    # 处理任务
-                    success = self._process_task(task_data)
+                        queue_name, task_json = result
+                        task_data = json.loads(task_json)
 
-                    # 失败则重试
-                    if not success:
-                        self._retry_failed_task(task_json)
-
-                except (redis.ConnectionError, redis.TimeoutError) as e:
-                    consecutive_errors += 1
-                    self.logger.error(
-                        f"Redis 连接异常 (连续第 {consecutive_errors} 次): {e}"
-                    )
-
-                    if consecutive_errors >= max_consecutive_errors:
-                        self.logger.critical(
-                            f"Redis 连续失败 {max_consecutive_errors} 次，尝试重建连接..."
+                        # 提交到线程池并发处理
+                        future = executor.submit(self._process_task, task_data)
+                        # 用闭包捕获 task_json 用于失败重试
+                        captured_json = task_json
+                        future.add_done_callback(
+                            lambda f, tj=captured_json: (
+                                f.result() is False and self._retry_failed_task(tj)
+                            ) if not f.cancelled() else None
                         )
-                        try:
-                            from ..config.redis_factory import RedisConnectionFactory
-                            self.redis_client = RedisConnectionFactory.get_client_with_retry(
-                                self.redis_config, max_retries=3
-                            )
-                            consecutive_errors = 0
-                            self.logger.info("Redis 重建连接成功")
-                        except Exception as reconnect_err:
-                            self.logger.critical(
-                                f"Redis 重建连接失败: {reconnect_err}，等待 10s 后重试"
-                            )
-                            time.sleep(10)
-                    else:
-                        # 指数退避
-                        backoff = min(2 ** consecutive_errors, 30)
-                        time.sleep(backoff)
 
-                except Exception as e:
-                    self.logger.error(f"消费循环未知异常: {e}")
-                    time.sleep(1)
+                    except (redis.ConnectionError, redis.TimeoutError) as e:
+                        consecutive_errors += 1
+                        self.logger.error(
+                            f"Redis 连接异常 (连续第 {consecutive_errors} 次): {e}"
+                        )
+
+                        if consecutive_errors >= max_consecutive_errors:
+                            self.logger.critical(
+                                f"Redis 连续失败 {max_consecutive_errors} 次，尝试重建连接..."
+                            )
+                            try:
+                                from ..config.redis_factory import RedisConnectionFactory
+                                self.redis_client = RedisConnectionFactory.get_client_with_retry(
+                                    self.redis_config, max_retries=3
+                                )
+                                consecutive_errors = 0
+                                self.logger.info("Redis 重建连接成功")
+                            except Exception as reconnect_err:
+                                self.logger.critical(
+                                    f"Redis 重建连接失败: {reconnect_err}，等待 10s 后重试"
+                                )
+                            time.sleep(10)
+                        else:
+                            backoff = min(2 ** consecutive_errors, 30)
+                            time.sleep(backoff)
+
+                    except Exception as e:
+                        self.logger.error(f"消费循环未知异常: {e}")
+                        time.sleep(1)
 
         except KeyboardInterrupt:
             self.logger.info("收到中断信号，停止消费者")
