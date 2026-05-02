@@ -2314,8 +2314,8 @@ rule-files:
 ## Auxiliary configuration files.
 ##
 
-classification-file: /etc/suricata/classification.config
-reference-config-file: /etc/suricata/reference.config
+classification-file: /usr/share/suricata/classification.config
+reference-config-file: /usr/share/suricata/reference.config
 # threshold-file: /etc/suricata/threshold.config
 
 ##

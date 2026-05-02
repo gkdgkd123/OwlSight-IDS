@@ -12,7 +12,7 @@ from typing import Dict, List, Any, Optional
 from collections import defaultdict, OrderedDict
 from pathlib import Path
 from scapy.all import sniff, IP, TCP, UDP
-from ..utils import generate_five_tuple_key, setup_logger
+from ..utils import generate_five_tuple_key, generate_trace_id, setup_logger
 from ..config.config import RedisConfig, ScapyConfig, XGBoostConfig
 from ..config.redis_factory import RedisConnectionFactory
 
@@ -430,7 +430,12 @@ class EarlyFlowDualModel:
 
         # 写入 Redis（使用 Pipeline 保证原子性）
         try:
+            # 分配或继承 trace_id
+            existing_tid = self.redis_client.hget(flow_key, "trace_id")
+            trace_id = existing_tid or generate_trace_id()
+
             pipe = self.redis_client.pipeline()
+            pipe.hset(flow_key, "trace_id", trace_id)
             pipe.hset(flow_key, "xgb_score", str(xgb_score))
             pipe.hset(flow_key, "anomaly_score", str(anomaly_score))
             pipe.hset(flow_key, "packet_count", str(flow_stats.packet_count))
@@ -440,7 +445,7 @@ class EarlyFlowDualModel:
             pipe.execute()
 
             self.logger.info(
-                f"[DUAL-MODEL] 流量分析完成 {flow_key} | "
+                f"[{trace_id}] [DUAL-MODEL] {flow_key} | "
                 f"XGB得分: {xgb_score:.3f} | 异常得分: {anomaly_score:.3f} | "
                 f"包数: {flow_stats.packet_count}"
             )

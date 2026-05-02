@@ -84,6 +84,7 @@ class IntelligentRouter:
                 return {}
 
             return {
+                "trace_id": state.get("trace_id", "?-????"),
                 "suricata_alert": state.get("suricata_alert", "false").lower() == "true",
                 "xgb_score": float(state.get("xgb_score", 0.0)),
                 "anomaly_score": float(state.get("anomaly_score", 0.0)),
@@ -105,6 +106,7 @@ class IntelligentRouter:
         2. 正常直接放行：XGB < 0.5 AND 异常分数 < 0.75
         3. 0day 猎杀：XGB < 0.5 BUT 异常分数 > 0.75（已知模型认为安全，但行为极度异常）
         """
+        trace_id = state.get("trace_id", "?-????")
         suricata_alert = state.get("suricata_alert", False)
         xgb_score = state.get("xgb_score", 0.0)
         anomaly_score = state.get("anomaly_score", 0.0)
@@ -112,17 +114,17 @@ class IntelligentRouter:
         # 决策层 1: 高危直接拦截
         if suricata_alert or xgb_score > self.xgb_high_threshold:
             self.logger.warning(
-                f"[BLOCK] 拦截高危流量 {flow_key} | "
+                f"[{trace_id}] [BLOCK] {flow_key} | "
                 f"Suricata: {suricata_alert} | XGB: {xgb_score:.3f} | Anomaly: {anomaly_score:.3f}"
             )
             if suricata_alert:
-                self.logger.warning(f"  └─ 触发规则: {state.get('signature', 'Unknown')}")
+                self.logger.warning(f"[{trace_id}]   └─ 触发规则: {state.get('signature', 'Unknown')}")
             return "BLOCK"
 
         # 决策层 2: 正常直接放行
         if xgb_score < self.xgb_low_threshold and anomaly_score < self.anomaly_threshold:
             self.logger.debug(
-                f"[PASS] 正常流量 {flow_key} | "
+                f"[{trace_id}] [PASS] {flow_key} | "
                 f"XGB: {xgb_score:.3f} | Anomaly: {anomaly_score:.3f}"
             )
             return "PASS"
@@ -130,7 +132,7 @@ class IntelligentRouter:
         # 决策层 3: 0day 猎杀策略
         if xgb_score < self.xgb_low_threshold and anomaly_score >= self.anomaly_threshold:
             self.logger.warning(
-                f"[0DAY-HUNT] 检测到疑似未知威胁 {flow_key} | "
+                f"[{trace_id}] [0DAY-HUNT] {flow_key} | "
                 f"XGB: {xgb_score:.3f} (已知模型认为安全) | "
                 f"Anomaly: {anomaly_score:.3f} (行为极度异常) | "
                 f"→ 转发至 LLM 深度研判"
@@ -140,14 +142,14 @@ class IntelligentRouter:
         # 决策层 3: 常规疑难流量（XGB 在灰色地带）
         if self.xgb_low_threshold <= xgb_score <= self.xgb_high_threshold:
             self.logger.info(
-                f"[SUSPICIOUS] 疑难流量 {flow_key} | "
+                f"[{trace_id}] [SUSPICIOUS] {flow_key} | "
                 f"XGB: {xgb_score:.3f} (灰色地带) | Anomaly: {anomaly_score:.3f} | "
                 f"→ 转发至 LLM 深度研判"
             )
             return "LLM_ANALYZE"
 
         # 兜底：理论上不应该到这里
-        self.logger.warning(f"[UNKNOWN] 未匹配决策规则 {flow_key} | XGB: {xgb_score:.3f} | Anomaly: {anomaly_score:.3f}")
+        self.logger.warning(f"[{trace_id}] [UNKNOWN] {flow_key} | XGB: {xgb_score:.3f} | Anomaly: {anomaly_score:.3f}")
         return "LLM_ANALYZE"
 
     def _send_to_llm_queue(self, flow_key: str, state: Dict[str, Any], decision: str):
@@ -155,6 +157,7 @@ class IntelligentRouter:
         try:
             message = {
                 "flow_key": flow_key,
+                "trace_id": state.get("trace_id", "?-????"),
                 "decision": decision,
                 "timestamp": time.time(),
                 "xgb_score": state.get("xgb_score", 0.0),
@@ -217,6 +220,10 @@ class IntelligentRouter:
                             pipe.hset(flow_key, "decision_time", str(time.time()))
                             pipe.expire(flow_key, self.redis_config.ttl)  # 刷新 TTL
                             pipe.execute()
+                            # Suricata 告警触发的拦截也送 LLM 深度溯源
+                            if state.get("suricata_alert"):
+                                self.window_stats['llm_analyzed'] += 1
+                                self._send_to_llm_queue(flow_key, state, decision)
 
                         elif decision == "PASS":
                             self.window_stats['passed'] += 1

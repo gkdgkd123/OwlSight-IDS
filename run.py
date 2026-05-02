@@ -6,6 +6,7 @@ OwlSight-IDS 一键启动脚本
     python run.py                          # 交互式菜单
     python run.py --live                   # 从网卡实时捕获
     python run.py --live --iface eth0      # 指定网卡
+    python run.py --live --with-suricata   # 自动拉起 Suricata + 4 模块
     python run.py --pcap data/xxx.pcap     # 从 pcap 文件回放
     python run.py --pcap data/xxx.pcap --llm-limit 20
 """
@@ -24,6 +25,7 @@ from src.config.config import SystemConfig, load_env_file
 from src.modules.early_flow_xgb import EarlyFlowDualModel
 from src.modules.intelligent_router import IntelligentRouter
 from src.modules.llm_analyzer import LLMAnalyzer
+from src.suricata_launcher import SuricataLauncher
 from src.utils import setup_logger
 
 
@@ -74,7 +76,7 @@ def list_interfaces():
 
 # ─── 实时模式 (网卡捕获) ───────────────────────────────
 
-def run_live(config, iface=None):
+def run_live(config, iface=None, suricata_launcher=None):
     from src.main_realtime import SemFlowIDS
 
     if iface:
@@ -84,11 +86,17 @@ def run_live(config, iface=None):
     print(f"  BPF 过滤 : {config.scapy.bpf_filter or '(无)'}")
     print(f"  Suricata : {config.suricata.eve_json_path}")
 
+    if suricata_launcher:
+        print(f"  Suricata : 自动管理 (PID={suricata_launcher.process.pid})")
+
     ids = SemFlowIDS(config)
 
     def shutdown(signum, frame):
         print("\n[STOP] 正在停止...")
         ids.stop()
+        if suricata_launcher:
+            suricata_launcher.stop()
+
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
@@ -296,7 +304,18 @@ def interactive_menu():
             iface = ifaces[int(sel)] if sel.isdigit() and int(sel) < len(ifaces) else None
         else:
             iface = None
-        return "live", {"iface": iface}
+
+        with_sur = input("  自动拉起 Suricata? [y/N]: ").strip().lower()
+        kwargs = {"iface": iface}
+        if with_sur == "y":
+            kwargs["with_suricata"] = True
+            sur_iface = input(f"  Suricata 监听网卡（回车默认 {iface or 'eth0'}）: ").strip()
+            if sur_iface:
+                kwargs["suricata_iface"] = sur_iface
+            sur_log = input("  Suricata 日志目录（回车默认 ./data/suricata_logs）: ").strip()
+            if sur_log:
+                kwargs["suricata_log_dir"] = sur_log
+        return "live", kwargs
 
     elif choice == "2":
         pcaps = list_pcap_files()
@@ -337,6 +356,9 @@ def main():
     mode.add_argument("--live", action="store_true", help="从网卡实时捕获")
     mode.add_argument("--pcap", metavar="FILE", help="从 pcap 文件回放")
     parser.add_argument("--iface", metavar="IFACE", help="指定网卡（仅实时模式）")
+    parser.add_argument("--with-suricata", action="store_true", help="自动拉起 Suricata 进程（仅实时模式）")
+    parser.add_argument("--suricata-iface", metavar="IFACE", help="Suricata 监听网卡（默认同 --iface）")
+    parser.add_argument("--suricata-log-dir", default="./data/suricata_logs", help="Suricata 日志目录")
     parser.add_argument("--llm-limit", type=int, default=20, help="LLM 最大分析条数（默认 20，0=不调用）")
     parser.add_argument("--log-level", default="INFO", help="日志级别（默认 INFO）")
     args = parser.parse_args()
@@ -375,14 +397,43 @@ def main():
         mode, kwargs = interactive_menu()
     elif args.live:
         mode = "live"
-        kwargs = {"iface": args.iface}
+        kwargs = {
+            "iface": args.iface,
+            "with_suricata": args.with_suricata,
+            "suricata_iface": args.suricata_iface,
+            "suricata_log_dir": args.suricata_log_dir,
+        }
     else:
         mode = "pcap"
         kwargs = {"pcap_file": args.pcap, "llm_limit": args.llm_limit}
 
     print(f"\n{'=' * 60}")
     if mode == "live":
+        suricata_launcher = None
+        if kwargs.pop("with_suricata", False):
+            suricata_iface = kwargs.pop("suricata_iface", None) or kwargs.get("iface") or config.scapy.interface
+            suricata_log_dir = kwargs.pop("suricata_log_dir", "./data/suricata_logs")
+
+            # 对齐 eve.json 路径
+            from pathlib import Path as _Path
+            config.suricata.eve_json_path = str(_Path(suricata_log_dir) / "eve.json")
+
+            print(f"  [Suricata] 启动引擎 (网卡={suricata_iface}, 日志={suricata_log_dir})...")
+            suricata_launcher = SuricataLauncher(
+                config_template="data/Suricata/suricata.yaml",
+                interface=suricata_iface,
+                log_dir=suricata_log_dir,
+            )
+            suricata_launcher.start()
+            print(f"  [Suricata] 引擎就绪, eve.json: {suricata_launcher.eve_json_path}")
+            print(f"  [READY] Suricata + 4 模块已全部就绪，监听 {suricata_iface}...")
+
+        kwargs["suricata_launcher"] = suricata_launcher
         run_live(config, **kwargs)
+
+        # run_live 返回后清理
+        if suricata_launcher:
+            suricata_launcher.stop()
     else:
         run_pcap(config, **kwargs)
 

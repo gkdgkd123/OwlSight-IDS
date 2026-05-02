@@ -218,18 +218,15 @@ class LLMAnalyzer:
     def _load_suricata_evidence(self, flow_key: str) -> Optional[Dict[str, Any]]:
         """从 Redis 读取 Suricata 告警的 HTTP/payload 语义字段"""
         try:
-            # 检查是否有 Suricata 告警
+            # 检查是否有 Suricata 告警（decode_responses=True，返回已是 str）
             has_alert = self.redis_client.hget(flow_key, "suricata_alert")
-            if not has_alert or has_alert.decode() != "true":
+            if not has_alert or has_alert != "true":
                 return None
 
-            # 读取所有证据字段
-            fields = self.redis_client.hgetall(flow_key)
-            if not fields:
+            # 读取所有证据字段（已自动解码为 str）
+            data = self.redis_client.hgetall(flow_key)
+            if not data:
                 return None
-
-            # 解码 bytes → str
-            data = {k.decode(): v.decode() for k, v in fields.items()}
 
             evidence = {
                 "signature": data.get("signature", ""),
@@ -335,8 +332,22 @@ class LLMAnalyzer:
         return "；".join(descriptions) if descriptions else "流量特征正常"
 
     def _build_prompt(self, features_text: str, xgb_score: float, anomaly_score: float,
-                      decision_type: str, suricata_evidence: Optional[Dict[str, Any]] = None) -> str:
+                      decision_type: str, suricata_evidence: Optional[Dict[str, Any]] = None,
+                      has_ml_data: bool = True) -> str:
         """构建 LLM Prompt（优先使用外部模板，回退到内置默认）"""
+
+        # ML 分数格式化：无数据时明确标记为 N/A
+        if has_ml_data and features_text:
+            ml_score_line = (
+                f"- XGBoost score: {xgb_score:.3f}\n"
+                f"- Isolation Forest anomaly score: {anomaly_score:.3f}"
+            )
+        else:
+            ml_score_line = (
+                f"- XGBoost score: N/A (flow was early-aborted by Suricata alert, no ML inference)\n"
+                f"- Isolation Forest anomaly score: N/A (no ML inference)"
+            )
+            features_text = "N/A — flow was early-aborted before feature extraction completed"
 
         # 构建上下文描述
         if suricata_evidence:
@@ -377,8 +388,7 @@ class LLMAnalyzer:
                 parts.append(f"\n**Payload Evidence**:\n```\n{payload}\n```")
 
             # ML scores
-            parts.append(f"\n- XGBoost score: {xgb_score:.3f}")
-            parts.append(f"- Isolation Forest anomaly score: {anomaly_score:.3f}")
+            parts.append(f"\n{ml_score_line}")
 
             context = "\n".join(parts)
 
@@ -421,7 +431,7 @@ class LLMAnalyzer:
 
         return prompt
 
-    def _call_llm_api(self, prompt: str) -> Dict[str, Any]:
+    def _call_llm_api(self, prompt: str, flow_key: str = "?", trace_id: str = "?-????") -> Dict[str, Any]:
         """调用 LLM API（使用 requests，带速率控制）"""
         if not self.openai_client:
             return self._dummy_result("API 配置未初始化")
@@ -432,7 +442,7 @@ class LLMAnalyzer:
             # 速率控制
             self._wait_for_rate_limit()
 
-            self.logger.info(f"调用 LLM API: {self.llm_config.api_model}")
+            self.logger.info(f"[{trace_id}] 调用 LLM API: {self.llm_config.api_model} | {flow_key}")
 
             # 构建请求
             url = f"{self.llm_config.api_base_url}/chat/completions"
@@ -470,9 +480,12 @@ class LLMAnalyzer:
             if not content and reasoning:
                 # 推理模型将结果放在 reasoning_content 中
                 content = reasoning
-                self.logger.info(f"LLM API 响应成功（推理模型），内容长度: {len(content)}")
+                self.logger.info(f"[{trace_id}] LLM API 响应成功（推理模型），长度: {len(content)} | {flow_key}")
             else:
-                self.logger.info(f"LLM API 响应成功，内容长度: {len(content)}")
+                self.logger.info(f"[{trace_id}] LLM API 响应成功，长度: {len(content)} | {flow_key}")
+
+            # 回显 LLM 原始输出
+            self.logger.info(f"[{trace_id}] [LLM-RESPONSE] {content}")
 
             # 解析 JSON
             json_start = content.find("{")
@@ -554,7 +567,8 @@ class LLMAnalyzer:
         decision = task_data.get("decision")
 
         try:
-            self.logger.info(f"[WORKER] 开始处理任务 | Flow: {flow_key} | Decision: {decision}")
+            trace_id = task_data.get("trace_id", "?-????")
+            self.logger.info(f"[{trace_id}] [WORKER] 处理任务 | {flow_key} | Decision: {decision}")
 
             # 提取特征
             features_json = task_data.get("features", "{}")
@@ -567,15 +581,19 @@ class LLMAnalyzer:
             # 从 Redis 读取 HTTP/payload 语义字段（由 M1 写入）
             suricata_evidence = self._load_suricata_evidence(flow_key)
 
+            # 判断 ML 数据是否有效（分数全 0 且无有效特征 = ML 未推理）
+            has_ml_data = not (xgb_score == 0.0 and anomaly_score == 0.0 and features == {})
+
             # 转换为自然语言
             features_text = self._features_to_natural_language(features)
 
             # 构建 Prompt（含 HTTP/payload 证据）
-            prompt = self._build_prompt(features_text, xgb_score, anomaly_score, decision, suricata_evidence)
+            prompt = self._build_prompt(features_text, xgb_score, anomaly_score, decision,
+                                        suricata_evidence, has_ml_data=has_ml_data)
 
             # 调用 LLM
             if self.llm_config.use_api:
-                result = self._call_llm_api(prompt)
+                result = self._call_llm_api(prompt, flow_key=flow_key, trace_id=trace_id)
             else:
                 result = self._call_local_llm(prompt)
 
@@ -584,11 +602,11 @@ class LLMAnalyzer:
             severity = result.get("severity", "Unknown")
             is_successful = result.get("is_successful_attack", "unknown")
             self.logger.info(
-                f"[LLM] 深度研判完成 {flow_key} | "
-                f"决策: {decision} | "
-                f"判定: {verdict} | "
-                f"严重性: {severity} | "
-                f"攻击成功: {is_successful} | "
+                f"[{trace_id}] [LLM-OUT] {flow_key} | "
+                f"决策: {decision.upper()} | "
+                f"判定: {verdict.upper()} | "
+                f"严重性: {severity.upper()} | "
+                f"攻击成功: {str(is_successful).upper()} | "
                 f"置信度: {result.get('confidence', 0):.2f} | "
                 f"建议: {result.get('recommended_action')}"
             )

@@ -7,7 +7,7 @@ import time
 import redis
 from typing import Optional, Dict, Any
 from pathlib import Path
-from ..utils import generate_five_tuple_key, setup_logger
+from ..utils import generate_five_tuple_key, generate_trace_id, setup_logger
 from ..config.config import RedisConfig, SuricataConfig
 from ..config.redis_factory import RedisConnectionFactory
 
@@ -54,8 +54,13 @@ class SuricataMonitor:
         signature = alert_info.get("signature", "Unknown")
         severity = alert_info.get("severity", 0)
 
+        # 分配或继承 trace_id
+        existing_tid = self.redis_client.hget(five_tuple_key, "trace_id")
+        trace_id = existing_tid or generate_trace_id()
+
         # 构建 Redis Hash 字段（保留完整告警证据）
         fields = {
+            "trace_id": trace_id,
             "suricata_alert": "true",
             "signature": signature,
             "severity": str(severity),
@@ -112,7 +117,7 @@ class SuricataMonitor:
                 # Early Abort 失效不影响主流程，继续
 
             self.logger.info(
-                f"[ALERT] 检测到高危流量 {five_tuple_key} | "
+                f"[{trace_id}] [ALERT] {five_tuple_key} | "
                 f"规则: {signature} | 严重级别: {severity} | 已广播提前终止信号"
             )
         except Exception as e:

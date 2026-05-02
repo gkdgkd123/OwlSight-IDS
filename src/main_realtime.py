@@ -86,9 +86,14 @@ class SemFlowIDS:
             thread.start()
             self.logger.info(f"启动线程: {thread.name}")
 
+        self.logger.info("=" * 60)
+        self.logger.info("  [READY] 系统就绪 — 4 模块已启动，等待流量...")
+        self.logger.info("=" * 60)
+
+        import time
         try:
-            for thread in self.threads:
-                thread.join()
+            while self.running:
+                time.sleep(0.5)
         except KeyboardInterrupt:
             self.logger.info("收到中断信号，正在停止系统...")
             self.stop()

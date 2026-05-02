@@ -76,8 +76,10 @@ Your PRIMARY and MOST IMPORTANT task is to determine whether an alert represents
 * **Case A: Missing Suricata (ML Alert Only / Encrypted Traffic)**
   * Strategy: Rely on behavioral features. High `xgb` + long `duration` = Suspected C2. High `anomaly` + massive `bytes` = Exfiltration.
 
-* **Case B: Missing ML (Suricata Alert Only)**
-  * Strategy: Rely strictly on `bytes_toclient`, `payload` semantics, and HTTP response content.
+* **Case B: Missing ML (Suricata Alert Only / ML N/A)**
+  * Indicators: ML scores show "N/A" or 0.000 for both XGBoost and Isolation Forest.
+  * Meaning: The flow was early-aborted by Suricata before ML inference completed. This does NOT mean "ML thinks it's safe" — it means "ML did not run."
+  * Strategy: Rely strictly on `bytes_toclient`, `payload` semantics, and HTTP response content. DO NOT cite ML scores as evidence of benign or malicious.
 
 * **Case C: HTTP Evidence Available (Dual Source)**
   * Strategy: HTTP response content is PRIMARY evidence. Flow features are SECONDARY. A 200 OK with database error in body = SUCCESS regardless of byte count.
