@@ -1,7 +1,7 @@
-# SemFlow-IDS 项目结构
+# OwlSight-IDS 项目结构
 
 ```
-SemFlow-IDS2/
+OwlSight-IDS2/
 ├── .gitignore              # Git 忽略配置
 ├── LICENSE                 # MIT 许可证
 ├── README.md               # 项目说明文档

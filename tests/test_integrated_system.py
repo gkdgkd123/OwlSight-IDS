@@ -1,5 +1,5 @@
 """
-SemFlow-IDS 集成测试脚本
+OwlSight-IDS 集成测试脚本
 使用 test.pcap 文件测试完整的检测流程（不依赖 Redis）
 """
 import sys
@@ -50,7 +50,7 @@ def analyze_pcap_with_early_flow(pcap_file, packet_trigger=10, time_trigger=3.0)
     """使用早流检测逻辑分析 PCAP 文件"""
 
     print("=" * 80)
-    print(f"SemFlow-IDS 集成测试 - 分析文件: {pcap_file}")
+    print(f"OwlSight-IDS 集成测试 - 分析文件: {pcap_file}")
     print("=" * 80)
 
     # 读取 PCAP

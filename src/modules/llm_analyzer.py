@@ -215,6 +215,60 @@ class LLMAnalyzer:
             self.logger.error(f"特征清洗失败: {e}")
             return {}
 
+    def _load_suricata_evidence(self, flow_key: str) -> Optional[Dict[str, Any]]:
+        """从 Redis 读取 Suricata 告警的 HTTP/payload 语义字段"""
+        try:
+            # 检查是否有 Suricata 告警
+            has_alert = self.redis_client.hget(flow_key, "suricata_alert")
+            if not has_alert or has_alert.decode() != "true":
+                return None
+
+            # 读取所有证据字段
+            fields = self.redis_client.hgetall(flow_key)
+            if not fields:
+                return None
+
+            # 解码 bytes → str
+            data = {k.decode(): v.decode() for k, v in fields.items()}
+
+            evidence = {
+                "signature": data.get("signature", ""),
+                "severity": data.get("severity", "3"),
+            }
+
+            # 完整规则文本
+            rule = data.get("suricata_rule", "")
+            if rule:
+                evidence["rule"] = rule
+
+            # Payload
+            payload = data.get("payload_printable", "")
+            if payload:
+                evidence["payload_printable"] = payload
+
+            # HTTP 语义字段
+            http_method = data.get("http_method", "")
+            if http_method:
+                evidence["http_method"] = http_method
+                evidence["http_url"] = data.get("http_url", "")
+                evidence["http_hostname"] = data.get("http_hostname", "")
+                evidence["http_status"] = data.get("http_status", "0")
+                evidence["http_user_agent"] = data.get("http_user_agent", "")
+                evidence["http_content_type"] = data.get("http_content_type", "")
+                evidence["http_protocol"] = data.get("http_protocol", "")
+                evidence["http_response_body_printable"] = data.get("http_response_body_printable", "")
+
+            # Flow 双向流量
+            for fld in ("pkts_toserver", "pkts_toclient", "bytes_toserver", "bytes_toclient"):
+                if fld in data:
+                    evidence[fld] = data[fld]
+
+            return evidence
+
+        except Exception as e:
+            self.logger.error(f"读取 Suricata 证据失败 {flow_key}: {e}")
+            return None
+
     def _features_to_natural_language(self, features: Dict[str, Any]) -> str:
         """将特征转换为自然语言描述"""
         descriptions = []
@@ -280,11 +334,55 @@ class LLMAnalyzer:
 
         return "；".join(descriptions) if descriptions else "流量特征正常"
 
-    def _build_prompt(self, features_text: str, xgb_score: float, anomaly_score: float, decision_type: str) -> str:
+    def _build_prompt(self, features_text: str, xgb_score: float, anomaly_score: float,
+                      decision_type: str, suricata_evidence: Optional[Dict[str, Any]] = None) -> str:
         """构建 LLM Prompt（优先使用外部模板，回退到内置默认）"""
 
         # 构建上下文描述
-        if decision_type == "ZERODAY_HUNT":
+        if suricata_evidence:
+            sig = suricata_evidence.get("signature", "")
+            sev = suricata_evidence.get("severity", "3")
+            pts = suricata_evidence.get("pkts_toserver", "?")
+            ptc = suricata_evidence.get("pkts_toclient", "?")
+            bts = suricata_evidence.get("bytes_toserver", "?")
+            btc = suricata_evidence.get("bytes_toclient", "?")
+
+            parts = [
+                f"**Detection Source**: Dual (Suricata + ML)",
+                f"- Suricata Alert: {sig} (severity: {sev})",
+                f"- Flow: pkts_toserver={pts}, pkts_toclient={ptc}, bytes_toserver={bts}, bytes_toclient={btc}",
+            ]
+
+            # Suricata 规则原文
+            rule = suricata_evidence.get("rule", "")
+            if rule:
+                parts.append(f"\n**Suricata Rule**:\n```\n{rule[:1500]}\n```")
+
+            # HTTP Evidence
+            http_method = suricata_evidence.get("http_method", "")
+            if http_method:
+                http_lines = [f"- Request: {http_method} {suricata_evidence.get('http_hostname', '')}{suricata_evidence.get('http_url', '')}"]
+                if suricata_evidence.get("http_status"):
+                    http_lines.append(f"- Response Status: {suricata_evidence['http_status']}")
+                if suricata_evidence.get("http_user_agent"):
+                    http_lines.append(f"- User-Agent: {suricata_evidence['http_user_agent'][:200]}")
+                resp_body = suricata_evidence.get("http_response_body_printable", "")
+                if resp_body:
+                    http_lines.append(f"- Response Body (truncated):\n```\n{resp_body}\n```")
+                parts.append(f"\n**HTTP Evidence**:\n" + "\n".join(http_lines))
+
+            # Payload Evidence
+            payload = suricata_evidence.get("payload_printable", "")
+            if payload:
+                parts.append(f"\n**Payload Evidence**:\n```\n{payload}\n```")
+
+            # ML scores
+            parts.append(f"\n- XGBoost score: {xgb_score:.3f}")
+            parts.append(f"- Isolation Forest anomaly score: {anomaly_score:.3f}")
+
+            context = "\n".join(parts)
+
+        elif decision_type == "ZERODAY_HUNT":
             context = (
                 f"**Detection Source**: ML Alert Only (no Suricata)\n"
                 f"- XGBoost score: {xgb_score:.3f} (< 0.5, model considers SAFE)\n"
@@ -466,11 +564,14 @@ class LLMAnalyzer:
             xgb_score = task_data.get("xgb_score", 0.0)
             anomaly_score = task_data.get("anomaly_score", 0.0)
 
+            # 从 Redis 读取 HTTP/payload 语义字段（由 M1 写入）
+            suricata_evidence = self._load_suricata_evidence(flow_key)
+
             # 转换为自然语言
             features_text = self._features_to_natural_language(features)
 
-            # 构建 Prompt
-            prompt = self._build_prompt(features_text, xgb_score, anomaly_score, decision)
+            # 构建 Prompt（含 HTTP/payload 证据）
+            prompt = self._build_prompt(features_text, xgb_score, anomaly_score, decision, suricata_evidence)
 
             # 调用 LLM
             if self.llm_config.use_api:

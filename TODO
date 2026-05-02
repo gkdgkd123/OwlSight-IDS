@@ -1,10 +1,14 @@
 计划内优先：
 1、suricata集成
-2、prompt
-3、大模型微调（准备数据、微调、部署）
+  1.1 suricata_launcher.py — 自动生成 suricata.yaml，subprocess 管理 Suricata 进程生命周期
+  1.2 run.py 改造为纯命令行一键启动 — Linux 上自动拉起 Suricata + 4 个 OwlSight 模块
+  1.3 data/suricata.yaml 已有现成配置可用
+  1.4 Docker Compose 编排 — Redis + Suricata + OwlSight 三容器统一管理
+2、prompt done
+3、大模型微调（准备数据、微调、部署） done
 4、流量聚合，溯源
 5、形成一条完整的链路
 6、ML层模型的训练、阈值调优、SHAP、语义化输出
-  6.1 Isolation Forest 异常分数校准：用 pcap 中的正常流量（Suricata PASS 的流）微调 iforest，解决当前异常分数普遍偏高（0.94-1.0）的问题
-7、LLM后的Agent
+  6.1 Isolation Forest 异常分数校准：用 pcap 中的正常流量（Suricata PASS 的流）微调 iforest，解决当前异常分数普遍偏高（0.94-1.0）的问题 done
+7、LLM后的Agent，大模型工具调用
 8、大模型可解释性

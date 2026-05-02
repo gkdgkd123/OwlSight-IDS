@@ -49,21 +49,57 @@ class SuricataMonitor:
         five_tuple_key = self._parse_five_tuple(event)
         if not five_tuple_key:
             return
-        
+
         alert_info = event.get("alert", {})
         signature = alert_info.get("signature", "Unknown")
         severity = alert_info.get("severity", 0)
-        
+
+        # 构建 Redis Hash 字段（保留完整告警证据）
+        fields = {
+            "suricata_alert": "true",
+            "signature": signature,
+            "severity": str(severity),
+            "timestamp": str(time.time()),
+        }
+
+        # 完整规则文本
+        rule = alert_info.get("rule", "")
+        if rule:
+            fields["suricata_rule"] = rule[:3000]
+
+        # Payload 原文（截断到 1000 字符）
+        payload = event.get("payload_printable", "") or ""
+        if payload:
+            fields["payload_printable"] = payload[:1000]
+
+        # HTTP 语义字段（仅 HTTP 协议告警有值）
+        http_info = event.get("http", {})
+        if http_info:
+            http_fields = {
+                "http_method": http_info.get("http_method", ""),
+                "http_url": http_info.get("url", "")[:500],
+                "http_hostname": http_info.get("hostname", ""),
+                "http_status": str(http_info.get("status", 0)),
+                "http_user_agent": http_info.get("http_user_agent", "")[:200],
+                "http_content_type": http_info.get("http_content_type", ""),
+                "http_protocol": http_info.get("protocol", ""),
+            }
+            # 响应体（截断到 2000 字符）
+            resp_body = http_info.get("http_response_body_printable", "") or ""
+            if resp_body:
+                http_fields["http_response_body_printable"] = resp_body[:2000]
+            fields.update(http_fields)
+
+        # Flow 双向流量
+        flow_info = event.get("flow", {})
+        if flow_info:
+            fields["pkts_toserver"] = str(flow_info.get("pkts_toserver", 0))
+            fields["pkts_toclient"] = str(flow_info.get("pkts_toclient", 0))
+            fields["bytes_toserver"] = str(flow_info.get("bytes_toserver", 0))
+            fields["bytes_toclient"] = str(flow_info.get("bytes_toclient", 0))
+
         try:
-            self.redis_client.hset(
-                five_tuple_key,
-                mapping={
-                    "suricata_alert": "true",
-                    "signature": signature,
-                    "severity": str(severity),
-                    "timestamp": str(time.time())
-                }
-            )
+            self.redis_client.hset(five_tuple_key, mapping=fields)
             self.redis_client.expire(five_tuple_key, self.redis_config.ttl)
 
             # 通过 Pub/Sub 广播高危流提前终止信号

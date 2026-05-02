@@ -169,7 +169,7 @@ def test_batch_process_alerts():
 
 def main():
     print("\n" + "="*60)
-    print("SemFlow-IDS Suricata 日志读取测试")
+    print("OwlSight-IDS Suricata 日志读取测试")
     print("="*60)
     
     test_files = [

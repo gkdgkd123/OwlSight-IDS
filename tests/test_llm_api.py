@@ -147,7 +147,7 @@ def test_llm_api():
     print(f"  建议措施: {result_2.get('recommended_action')}")
 
     print("\n[SUCCESS] LLM API 测试完成！")
-    print("\nClaude Opus 4.6 已成功集成到 SemFlow-IDS 系统")
+    print("\nClaude Opus 4.6 已成功集成到 OwlSight-IDS 系统")
     print("可以用于实时流量的深度语义分析和 0day 检测")
 
 

@@ -1,4 +1,4 @@
-# SemFlow-IDS Test Report
+# OwlSight-IDS Test Report
 
 **Test Date**: 2026-04-13  
 **Test File**: `data/test.pcap`  
@@ -186,7 +186,7 @@
 
 **Status**: ✅ **SYSTEM FUNCTIONAL**
 
-The SemFlow-IDS three-layer detection architecture is working as designed:
+The OwlSight-IDS three-layer detection architecture is working as designed:
 - L0 (Suricata rules) → Ready for integration
 - L1 (XGBoost ML) → Feature extraction validated, model needs training
 - L2 (Qwen LLM) → Logic validated, model needs deployment

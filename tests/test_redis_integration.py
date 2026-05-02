@@ -257,7 +257,7 @@ def test_suricata_alert():
 def main():
     """主函数"""
     print("=" * 80)
-    print("SemFlow-IDS 双模型协同检测系统 - 真实 Redis 测试")
+    print("OwlSight-IDS 双模型协同检测系统 - 真实 Redis 测试")
     print("=" * 80)
     print("\n架构: XGBoost (监督学习) + Isolation Forest (无监督学习)")
     print("决策树:")

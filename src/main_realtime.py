@@ -1,5 +1,5 @@
 """
-SemFlow-IDS 实时恶意流量协同检测系统 - 主程序入口
+OwlSight-IDS 实时恶意流量协同检测系统 - 主程序入口
 三层异构协同检测架构：规则匹配 + 机器学习 + 大语言模型
 """
 import argparse
@@ -48,12 +48,12 @@ class SemFlowIDS:
         self.threads = []
         self.running = False
 
-        self.logger.info("SemFlow-IDS 系统初始化完成")
+        self.logger.info("OwlSight-IDS 系统初始化完成")
     
     def start(self):
         self.running = True
         self.logger.info("=" * 60)
-        self.logger.info("SemFlow-IDS 实时恶意流量协同检测系统启动")
+        self.logger.info("OwlSight-IDS 实时恶意流量协同检测系统启动")
         self.logger.info("=" * 60)
 
         suricata_thread = threading.Thread(
@@ -102,13 +102,13 @@ class SemFlowIDS:
         self.llm_analyzer.request_shutdown()
 
         self.logger.info("=" * 60)
-        self.logger.info("SemFlow-IDS 系统已停止")
+        self.logger.info("OwlSight-IDS 系统已停止")
         self.logger.info("=" * 60)
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="SemFlow-IDS 实时恶意流量协同检测系统"
+        description="OwlSight-IDS 实时恶意流量协同检测系统"
     )
     
     parser.add_argument(
