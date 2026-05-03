@@ -227,14 +227,19 @@
 
 2. **Run the full system**
    ```bash
-   python src/main_realtime.py
+   # Live capture from network interface (auto-start Suricata)
+   python run.py --live --with-suricata
+
+   # Or choose interactively
+   python run.py
+
+   # Replay from pcap file
+   python run.py --pcap data/test.pcap --llm-limit 20
    ```
 
 3. **Run tests** (verify installation)
    ```bash
-   python tests/test_config.py
-   python tests/test_redis_integration.py
-   python tests/test_llm_api.py
+   python -m pytest tests/ -v
    ```
 
 ### Configuration Details
@@ -282,32 +287,29 @@ LOG_LEVEL=INFO
 OwlSight-IDS/
 ├── src/                    # Main package
 │   ├── config/
-│   │   └── config.py                # Configuration with .env support
+│   │   ├── config.py                # Configuration with .env support
+│   │   └── redis_factory.py         # Redis connection pool factory
 │   ├── modules/
-│   │   ├── suricata_monitor.py      # Module 1: Rule engine (eve.json)
+│   │   ├── suricata_monitor.py      # Module 1: Rule engine (eve.json tailing)
 │   │   ├── early_flow_xgb.py        # Module 2: Feature extraction & dual-model ML
-│   │   ├── intelligent_router.py    # Module 3: Decision tree (producer)
-│   │   └── llm_analyzer.py          # Module 4: LLM semantic analysis (consumer)
-│   ├── main_realtime.py             # Main entry point
-│   └── utils.py                     # Utility functions
+│   │   ├── intelligent_router.py    # Module 3: Decision tree + LLM task producer
+│   │   ├── llm_analyzer.py          # Module 4: LLM semantic analysis consumer
+│   │   └── redis_manager.py         # Redis health monitoring & lifecycle mgmt
+│   ├── engine.py                    # Engine: 4-module orchestrator
+│   ├── suricata_launcher.py         # Suricata subprocess lifecycle manager
+│   └── utils.py                     # Trace IDs, colored logging, helpers
 ├── scripts/
 │   ├── preprocess_cicids2017.py     # CICIDS2017 dataset preprocessing
 │   ├── train_xgboost.py             # XGBoost model training
 │   └── train_iforest.py             # Isolation Forest model training
 ├── tests/                           # Comprehensive test suite
-│   ├── test_config.py               # Configuration loading tests
-│   ├── test_redis_integration.py    # Redis integration tests
-│   ├── test_llm_api.py              # LLM API tests
-│   ├── test_env_loading.py          # Environment file loading tests
-│   └── ...
-├── docs/                            # Complete documentation
-│   ├── architecture_overview.md     # System design deep dive
-│   ├── TEST_REPORT.md               # Test results and metrics
-│   └── ...
 ├── data/                            # Sample data and datasets
-│   ├── test.pcap                    # Sample PCAP file
-│   ├── eve.json                     # Sample eve.json
-│   └── MachineLearningCVE/          # CICIDS2017 dataset (symlink)
+│   ├── Suricata/
+│   │   ├── suricata.yaml            # Suricata configuration template
+│   │   ├── classification.config    # Suricata classification rules
+│   │   └── reference.config         # Suricata reference rules
+│   └── suricata_logs/               # Suricata runtime logs (eve.json)
+├── run.py                           # CLI entry point (live, pcap, interactive)
 ├── .env.example                     # Environment template (SAFE to commit)
 ├── .gitignore                       # Git ignore rules (protects .env)
 ├── requirements.txt                 # Python dependencies
@@ -541,14 +543,19 @@ Made with ❤️ for cybersecurity research and education
 
 2. **运行完整系统**
    ```bash
-   python src/main_realtime.py
+   # 实时网卡捕获（自动拉起 Suricata）
+   python run.py --live --with-suricata
+
+   # 或交互式选择
+   python run.py
+
+   # pcap 回放
+   python run.py --pcap data/test.pcap --llm-limit 20
    ```
 
 3. **运行测试**（验证安装）
    ```bash
-   python tests/test_config.py
-   python tests/test_redis_integration.py
-   python tests/test_llm_api.py
+   python -m pytest tests/ -v
    ```
 
 #### 环境配置说明
@@ -596,21 +603,29 @@ LOG_LEVEL=INFO
 OwlSight-IDS/
 ├── src/                    # 主包
 │   ├── config/
-│   │   └── config.py                # 配置管理（支持 .env）
+│   │   ├── config.py                # 配置管理（支持 .env）
+│   │   └── redis_factory.py         # Redis 连接池工厂
 │   ├── modules/
-│   │   ├── suricata_monitor.py      # 模块 1: 规则引擎（eve.json）
-│   │   ├── early_flow_xgb.py        # 模块 2: 特征提取 & 双模型 ML
-│   │   ├── intelligent_router.py    # 模块 3: 决策树（生产者）
-│   │   └── llm_analyzer.py          # 模块 4: LLM 语义分析（消费者）
-│   ├── main_realtime.py             # 主入口
-│   └── utils.py                     # 工具函数
+│   │   ├── suricata_monitor.py      # 模块 1: 规则引擎（eve.json 监控）
+│   │   ├── early_flow_xgb.py        # 模块 2: 特征提取 & 双模型推理
+│   │   ├── intelligent_router.py    # 模块 3: 决策树 + LLM 任务生产
+│   │   ├── llm_analyzer.py          # 模块 4: LLM 语义分析消费
+│   │   └── redis_manager.py         # Redis 健康监控 & 生命周期管理
+│   ├── engine.py                    # 检测引擎：4 模块协同编排
+│   ├── suricata_launcher.py         # Suricata 子进程生命周期管理
+│   └── utils.py                     # trace_id、着色日志、工具函数
 ├── scripts/
 │   ├── preprocess_cicids2017.py     # CICIDS2017 数据集预处理
 │   ├── train_xgboost.py             # XGBoost 模型训练
 │   └── train_iforest.py             # 孤立森林模型训练
 ├── tests/                           # 完整测试套件
-├── docs/                            # 完整文档
 ├── data/                            # 示例数据
+│   ├── Suricata/
+│   │   ├── suricata.yaml            # Suricata 配置模板
+│   │   ├── classification.config    # Suricata 分类规则
+│   │   └── reference.config         # Suricata 引用规则
+│   └── suricata_logs/               # Suricata 运行时日志（eve.json）
+├── run.py                           # CLI 入口（live / pcap / 交互式）
 ├── .env.example                     # 环境模板（安全提交）
 ├── .gitignore                       # Git 忽略规则（保护 .env）
 ├── requirements.txt                 # Python 依赖
