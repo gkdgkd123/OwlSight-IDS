@@ -25,7 +25,7 @@
 - **🎯 三层协同检测架构**
   - **L0（规则引擎）**：基于 Suricata 的签名检测
   - **L1（机器学习）**：双模型协同推理（XGBoost + 孤立森林）
-  - **L2（语义分析）**：Claude Opus 4.6 LLM 深度分析
+  - **L2（语义分析）**：自微调 Qwen3.6-27B LLM 深度分析（同时支持外部大模型 API）
 
 - **🔬 双模型协同策略**
   - **XGBoost**：监督学习识别已知攻击（AUC: 0.977）
@@ -58,7 +58,7 @@
 - **Python**: 3.8+
 - **Redis**: 6.0+（模块间状态共享和消息队列）
 - **Suricata**: 6.0+（L0 规则检测引擎）
-- **LLM API Key**: Claude Opus 4.6（或兼容 OpenAI 格式的 API）
+- **LLM API Key**: 自微调 Qwen3.6-27B 或兼容 OpenAI 格式的外部 API
 - **系统**: Linux（推荐）/ macOS / Windows
 
 #### 安装步骤
@@ -178,11 +178,11 @@ XGB_THRESHOLD_HIGH=0.9        # 高危阈值
 XGB_THRESHOLD_LOW=0.5         # 低危阈值
 ANOMALY_THRESHOLD=0.75        # 异常阈值
 
-# LLM 配置（Claude Opus 4.6）
+# LLM 配置（自微调 Qwen3.6-27B 或外部 API）
 LLM_USE_API=true
-LLM_API_BASE_URL=https://new.timefiles.online/v1
-LLM_API_KEY=your_api_key_here # 设置环境变量
-LLM_API_MODEL=claude-opus-4-6
+LLM_API_BASE_URL=http://localhost:8000/v1  # 本地 vLLM 或外部代理
+LLM_API_KEY=your_api_key_here
+LLM_API_MODEL=owlsight-qwen3.6-27b-lora    # 微调后的适配器名称
 
 # 系统配置
 LOG_LEVEL=INFO
@@ -210,13 +210,17 @@ OwlSight-IDS/
 ├── scripts/
 │   ├── preprocess_cicids2017.py     # CICIDS2017 数据集预处理
 │   ├── train_xgboost.py             # XGBoost 模型训练
-│   └── train_iforest.py             # 孤立森林模型训练
+│   ├── train_iforest.py             # 孤立森林模型训练
+│   └── LLM/
+│       ├── generate_finetune_data.py # LLM 微调数据生成
+│       └── train_llm.py              # Qwen3.6-27B QLoRA 微调（Unsloth）
 ├── tests/                           # 完整测试套件
 ├── data/                            # 示例数据
 │   ├── Suricata/
 │   │   ├── suricata.yaml            # Suricata 配置模板
 │   │   ├── classification.config    # Suricata 分类规则
 │   │   └── reference.config         # Suricata 引用规则
+│   ├── LLM/                         # 微调数据集（JSONL）
 │   └── suricata_logs/               # Suricata 运行时日志（eve.json）
 ├── run.py                           # CLI 入口（live / pcap / 交互式）
 ├── .env.example                     # 环境模板（安全提交）
@@ -250,6 +254,11 @@ OwlSight-IDS/
 - **生产者（模块 3）**：快速决策，任务入队
 - **消费者（模块 4）**：独立处理，速率限制
 - **优势**：LLM API 延迟（3-5s）不阻塞实时检测（<1ms）
+
+### 4. **自研微调大模型**
+- 基于 Unsloth + 4-bit QLoRA 对 Qwen3.6-27B 进行监督微调
+- 使用检测流水线产出的攻击流量数据构建定制 SFT 数据集
+- 支持 OpenAI 兼容 API 调用，可灵活替换为任意外部大模型（Claude、GPT 等）
 
 ---
 
@@ -291,7 +300,7 @@ LLM_API_KEY=your_key_here
 - **Scikit-learn**: 机器学习库（孤立森林）
 - **Redis**: 内存数据结构存储
 - **Scapy**: 数据包操作库
-- **Claude Opus 4.6**: 大语言模型
+- **Qwen3.6-27B / Unsloth**: 自微调大语言模型（4-bit QLoRA）用于语义威胁分析
 - **CICIDS2017**: 加拿大网络安全研究所数据集
 
 ---

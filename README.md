@@ -25,7 +25,7 @@
 - **🎯 Triple-Layer Detection Architecture**
   - **L0 (Rule Engine)**: Suricata-based signature detection for rapid filtering
   - **L1 (Machine Learning)**: Dual-model cooperative inference (XGBoost + Isolation Forest)
-  - **L2 (Semantic Analysis)**: Claude Opus 4.6 LLM for deep threat analysis
+  - **L2 (Semantic Analysis)**: Fine-tuned Qwen3.6-27B LLM (also supports external LLM APIs)
 
 - **🔬 Dual-Model Cooperative Strategy**
   - **XGBoost**: Supervised learning for known attack patterns (AUC: 0.977)
@@ -58,7 +58,7 @@
 | L0 | Suricata 6.0+ | Rule-based detection | Signature matching |
 | L1 ML | XGBoost + scikit-learn | Dual-model inference | AUC: 0.977 |
 | L1 Decision | Python threading | Decision tree logic | Real-time routing |
-| L2 LLM | Claude Opus 4.6 API | Semantic analysis | 0day threat hunting |
+| L2 LLM | Fine-tuned Qwen3.6-27B / External API | Semantic analysis | 0day threat hunting |
 | State Hub | Redis 6.0+ | Inter-module communication | Message queue + state store |
 | Feature Extraction | Scapy | Packet capture & analysis | 18-dim feature vector |
 
@@ -115,7 +115,7 @@
          │   - BRPOP consumption         │
          │   - Rate limiting             │
          │   - Retry mechanism           │
-         │   - Claude Opus API calls     │
+         │   - Fine-tuned LLM API calls   │
          └───────────────────────────────┘
 ```
 
@@ -188,7 +188,7 @@
 - **Python**: 3.8 or higher
 - **Redis**: 6.0+ (inter-module state sharing and message queue)
 - **Suricata**: 6.0+ (L0 rule-based detection engine)
-- **LLM API Key**: Claude Opus 4.6 (or compatible OpenAI-format API)
+- **LLM API Key**: Self-fine-tuned Qwen3.6-27B or compatible OpenAI-format API
 - **System**: Linux (recommended) / macOS / Windows
 
 ### Installation
@@ -308,11 +308,11 @@ XGB_THRESHOLD_HIGH=0.9           # High-risk threshold
 XGB_THRESHOLD_LOW=0.5            # Low-risk threshold
 ANOMALY_THRESHOLD=0.75           # Anomaly detection threshold
 
-# LLM Configuration (Claude Opus 4.6)
+# LLM Configuration (Fine-tuned Qwen3.6-27B or external API)
 LLM_USE_API=true
-LLM_API_BASE_URL=https://new.timefiles.online/v1
-LLM_API_KEY=your_api_key_here    # Set environment variable
-LLM_API_MODEL=claude-opus-4-6
+LLM_API_BASE_URL=http://localhost:8000/v1  # Local vLLM or external proxy
+LLM_API_KEY=your_api_key_here
+LLM_API_MODEL=owlsight-qwen3.6-27b-lora    # Fine-tuned adapter name
 
 # System
 LOG_LEVEL=INFO
@@ -340,13 +340,17 @@ OwlSight-IDS/
 ├── scripts/
 │   ├── preprocess_cicids2017.py     # CICIDS2017 dataset preprocessing
 │   ├── train_xgboost.py             # XGBoost model training
-│   └── train_iforest.py             # Isolation Forest model training
+│   ├── train_iforest.py             # Isolation Forest model training
+│   └── LLM/
+│       ├── generate_finetune_data.py # LLM fine-tuning data generation
+│       └── train_llm.py              # Qwen3.6-27B QLoRA fine-tuning (Unsloth)
 ├── tests/                           # Comprehensive test suite
 ├── data/                            # Sample data and datasets
 │   ├── Suricata/
 │   │   ├── suricata.yaml            # Suricata configuration template
 │   │   ├── classification.config    # Suricata classification rules
 │   │   └── reference.config         # Suricata reference rules
+│   ├── LLM/                         # Fine-tuning datasets (JSONL)
 │   └── suricata_logs/               # Suricata runtime logs (eve.json)
 ├── run.py                           # CLI entry point (live, pcap, interactive)
 ├── .env.example                     # Environment template (SAFE to commit)
@@ -396,7 +400,12 @@ Detection Condition:
 - 18-dimensional feature vector optimized for early detection
 - Memory-efficient with automatic cleanup of stale flows
 
-### 5. **Production-Ready Features**
+### 5. **Self-Fine-Tuned LLM for Threat Analysis**
+- Qwen3.6-27B fine-tuned via Unsloth with 4-bit QLoRA for efficient low-VRAM training
+- Custom SFT dataset derived from detection pipeline outputs (attack flows + metadata)
+- OpenAPI-compatible endpoint — swappable with any external model (Claude, GPT, etc.)
+
+### 6. **Production-Ready Features**
 - Thread-safe statistics with proper locking
 - Automatic retry mechanism (max 3 retries) for failed tasks
 - Queue health monitoring with alerting
@@ -486,7 +495,7 @@ If you use OwlSight-IDS in your research, please cite:
 - **Scikit-learn**: Machine learning library (Isolation Forest)
 - **Redis**: In-memory data structure store
 - **Scapy**: Packet manipulation library
-- **Claude Opus 4.6**: Large language model for semantic analysis
+- **Qwen3.6-27B / Unsloth**: Fine-tuned LLM for semantic threat analysis (4-bit QLoRA)
 - **CICIDS2017**: Canadian Institute for Cybersecurity dataset
 
 ---
