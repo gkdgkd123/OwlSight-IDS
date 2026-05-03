@@ -28,7 +28,7 @@ from src.modules.llm_analyzer import LLMAnalyzer
 from src.modules.redis_manager import RedisManager
 from src.engine import Engine
 from src.suricata_launcher import SuricataLauncher
-from src.utils import setup_logger
+from src.utils import setup_logger, print_banner
 
 
 # ─── 预检 ──────────────────────────────────────────────
@@ -395,6 +395,8 @@ def main():
 {'=' * 60}
 
   [1/2] 加载配置...""")
+
+    print_banner()
 
     config = SystemConfig.from_env()
 

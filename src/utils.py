@@ -140,6 +140,26 @@ def setup_logger(name: str, level: str = "INFO") -> logging.Logger:
     return logger
 
 
+# ─── ASCII Banner ──────────────────────────────────────
+
+_BANNER = r"""
+ ██████╗ ██╗    ██╗██╗     ███████╗██╗ ██████╗ ██╗  ██╗████████╗
+██╔═══██╗██║    ██║██║     ██╔════╝██║██╔════╝ ██║  ██║╚══██╔══╝
+██║   ██║██║ █╗ ██║██║     ███████╗██║██║  ███╗███████║   ██║
+██║   ██║██║███╗██║██║     ╚════██║██║██║   ██║██╔══██║   ██║
+╚██████╔╝╚███╔███╔╝███████╗███████║██║╚██████╔╝██║  ██║   ██║
+ ╚═════╝  ╚══╝╚══╝ ╚══════╝╚══════╝╚═╝ ╚═════╝ ╚═╝  ╚═╝   ╚═╝"""
+
+_BANNER_SUB = "        Intrusion Detection System — 三层异构协同入侵检测系统"
+
+
+def print_banner():
+    """打印 OwlSight-IDS ASCII 艺术 Banner"""
+    print(f"{_BRIGHT_CYAN}{_BANNER}{_RESET}")
+    print(f"{_DIM}{_BANNER_SUB}{_RESET}")
+    print()
+
+
 def sanitize_text(text: str, max_length: int = 1000) -> str:
     if not text:
         return ""
