@@ -188,59 +188,100 @@
 ### Prerequisites
 
 - **Python**: 3.8 or higher
-- **Redis**: 6.0+ (for state sharing and message queue)
-- **Suricata**: 6.0+ (for rule-based detection)
-- **System**: Linux/macOS/Windows with network interface access
-- **LLM API**: Claude Opus 4.6 API key (or Qwen for local mode)
+- **Redis**: 6.0+ (inter-module state sharing and message queue)
+- **Suricata**: 6.0+ (L0 rule-based detection engine)
+- **LLM API Key**: Claude Opus 4.6 (or compatible OpenAI-format API)
+- **System**: Linux (recommended) / macOS / Windows
 
 ### Installation
 
-1. **Clone the repository**
+1. **Install system dependencies**
+
+   Ubuntu/Debian:
+   ```bash
+   sudo apt update
+   sudo apt install -y redis-server suricata
+   sudo systemctl enable --now redis-server
+   ```
+
+   macOS:
+   ```bash
+   brew install redis suricata
+   brew services start redis
+   ```
+
+2. **Clone the repository**
    ```bash
    git clone https://github.com/gkdgkd123/OwlSight-IDS.git
    cd OwlSight-IDS
    ```
 
-2. **Create virtual environment**
+3. **Create virtual environment & install Python dependencies**
    ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-
-3. **Install dependencies**
-   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
    pip install -r requirements.txt
    ```
 
-4. **Configure environment variables**
+4. **Configure environment**
    ```bash
    cp .env.example .env
-   # Edit .env with your LLM API key and other settings
+   # Edit .env — at minimum set your LLM_API_KEY
    ```
 
-### Quick Start
+### Run the System
 
-1. **Start Redis** (prerequisite)
-   ```bash
-   redis-server
-   ```
+All modes are launched via a single entry point `run.py`:
 
-2. **Run the full system**
-   ```bash
-   # Live capture from network interface (auto-start Suricata)
-   python run.py --live --with-suricata
+```bash
+# Interactive menu (guided setup)
+python run.py
 
-   # Or choose interactively
-   python run.py
+# Live capture + auto-launch Suricata (recommended for production)
+python run.py --live --with-suricata --iface eth0
 
-   # Replay from pcap file
-   python run.py --pcap data/test.pcap --llm-limit 20
-   ```
+# Live capture only (Suricata already running separately)
+python run.py --live --iface eth0
 
-3. **Run tests** (verify installation)
-   ```bash
-   python -m pytest tests/ -v
-   ```
+# Custom Suricata log directory
+python run.py --live --with-suricata --suricata-log-dir /var/log/suricata
+
+# pcap file replay with LLM limit
+python run.py --pcap data/test.pcap --llm-limit 20
+
+# pcap replay without LLM (ML-only pipeline)
+python run.py --pcap data/test.pcap --llm-limit 0
+
+# Debug logging
+python run.py --live --with-suricata --log-level DEBUG
+```
+
+| Flag | Description |
+|------|-------------|
+| `--live` | Real-time capture from network interface |
+| `--pcap FILE` | Replay from pcap file |
+| `--iface IFACE` | Network interface (default: eth0) |
+| `--with-suricata` | Auto-start & manage Suricata subprocess |
+| `--suricata-iface IFACE` | Suricata listen interface (defaults to `--iface`) |
+| `--suricata-log-dir DIR` | Suricata log directory (default: ./data/suricata_logs) |
+| `--llm-limit N` | Max LLM analyses in pcap mode (default: 20, 0=disable) |
+| `--log-level LEVEL` | DEBUG, INFO, WARNING, ERROR (default: INFO) |
+
+### Verify Installation
+
+```bash
+# Check Redis connectivity
+redis-cli ping   # Expected: PONG
+
+# Check Suricata
+suricata --build-info | head -3
+
+# Check Python dependencies
+python -c "import redis, scapy, xgboost, sklearn; print('OK')"
+
+# Run test suite
+python -m pytest tests/ -v
+```
 
 ### Configuration Details
 
@@ -503,60 +544,101 @@ Made with ❤️ for cybersecurity research and education
 
 #### 前置要求
 
-- **Python**: 3.8 或更高版本
-- **Redis**: 6.0+ （状态共享和消息队列）
-- **Suricata**: 6.0+ （规则检测）
-- **系统**: Linux/macOS/Windows
-- **LLM API**: Claude Opus 4.6 API 密钥
+- **Python**: 3.8+
+- **Redis**: 6.0+（模块间状态共享和消息队列）
+- **Suricata**: 6.0+（L0 规则检测引擎）
+- **LLM API Key**: Claude Opus 4.6（或兼容 OpenAI 格式的 API）
+- **系统**: Linux（推荐）/ macOS / Windows
 
 #### 安装步骤
 
-1. **克隆仓库**
+1. **安装系统依赖**
+
+   Ubuntu/Debian:
+   ```bash
+   sudo apt update
+   sudo apt install -y redis-server suricata
+   sudo systemctl enable --now redis-server
+   ```
+
+   macOS:
+   ```bash
+   brew install redis suricata
+   brew services start redis
+   ```
+
+2. **克隆仓库**
    ```bash
    git clone https://github.com/gkdgkd123/OwlSight-IDS.git
    cd OwlSight-IDS
    ```
 
-2. **创建虚拟环境**
+3. **创建虚拟环境并安装 Python 依赖**
    ```bash
-   python -m venv venv
-   source venv/bin/activate  # Windows: venv\Scripts\activate
-   ```
-
-3. **安装依赖**
-   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
    pip install -r requirements.txt
    ```
 
 4. **配置环境变量**
    ```bash
    cp .env.example .env
-   # 编辑 .env 文件配置 LLM API 密钥和其他参数
+   # 编辑 .env — 至少需要设置 LLM_API_KEY
    ```
 
-#### 快速使用
+#### 运行系统
 
-1. **启动 Redis**（必须）
-   ```bash
-   redis-server
-   ```
+所有模式通过统一入口 `run.py` 启动：
 
-2. **运行完整系统**
-   ```bash
-   # 实时网卡捕获（自动拉起 Suricata）
-   python run.py --live --with-suricata
+```bash
+# 交互式菜单（引导式配置）
+python run.py
 
-   # 或交互式选择
-   python run.py
+# 实时网卡捕获 + 自动拉起 Suricata（生产推荐）
+python run.py --live --with-suricata --iface eth0
 
-   # pcap 回放
-   python run.py --pcap data/test.pcap --llm-limit 20
-   ```
+# 仅实时捕获（Suricata 已在后台运行）
+python run.py --live --iface eth0
 
-3. **运行测试**（验证安装）
-   ```bash
-   python -m pytest tests/ -v
-   ```
+# 自定义 Suricata 日志目录
+python run.py --live --with-suricata --suricata-log-dir /var/log/suricata
+
+# pcap 回放 + LLM 限制
+python run.py --pcap data/test.pcap --llm-limit 20
+
+# pcap 回放不调用 LLM（仅 ML 流水线）
+python run.py --pcap data/test.pcap --llm-limit 0
+
+# 调试日志
+python run.py --live --with-suricata --log-level DEBUG
+```
+
+| 参数 | 说明 |
+|------|------|
+| `--live` | 从网卡实时捕获流量 |
+| `--pcap FILE` | 从 pcap 文件回放 |
+| `--iface IFACE` | 网卡接口（默认: eth0） |
+| `--with-suricata` | 自动拉起并管理 Suricata 子进程 |
+| `--suricata-iface IFACE` | Suricata 监听网卡（默认同 `--iface`） |
+| `--suricata-log-dir DIR` | Suricata 日志目录（默认: ./data/suricata_logs） |
+| `--llm-limit N` | pcap 模式 LLM 最大分析条数（默认 20，0=禁用） |
+| `--log-level LEVEL` | DEBUG, INFO, WARNING, ERROR（默认: INFO） |
+
+#### 验证安装
+
+```bash
+# 检查 Redis 连接
+redis-cli ping   # 预期: PONG
+
+# 检查 Suricata
+suricata --build-info | head -3
+
+# 检查 Python 依赖
+python -c "import redis, scapy, xgboost, sklearn; print('OK')"
+
+# 运行测试套件
+python -m pytest tests/ -v
+```
 
 #### 环境配置说明
 
