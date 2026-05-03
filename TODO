@@ -11,4 +11,7 @@
 6、ML层模型的训练、阈值调优、SHAP、语义化输出
   6.1 Isolation Forest 异常分数校准：用 pcap 中的正常流量（Suricata PASS 的流）微调 iforest，解决当前异常分数普遍偏高（0.94-1.0）的问题 done
 7、LLM后的Agent，大模型工具调用
-8、大模型可解释性
+8、大模型可解释性[pending]
+9、redis管理
+10、readme.md 更新，环境配置脚本新增
+

@@ -25,6 +25,8 @@ from src.config.config import SystemConfig, load_env_file
 from src.modules.early_flow_xgb import EarlyFlowDualModel
 from src.modules.intelligent_router import IntelligentRouter
 from src.modules.llm_analyzer import LLMAnalyzer
+from src.modules.redis_manager import RedisManager
+from src.engine import Engine
 from src.suricata_launcher import SuricataLauncher
 from src.utils import setup_logger
 
@@ -77,7 +79,6 @@ def list_interfaces():
 # ─── 实时模式 (网卡捕获) ───────────────────────────────
 
 def run_live(config, iface=None, suricata_launcher=None):
-    from src.main_realtime import SemFlowIDS
 
     if iface:
         config.scapy.interface = iface
@@ -89,7 +90,7 @@ def run_live(config, iface=None, suricata_launcher=None):
     if suricata_launcher:
         print(f"  Suricata : 自动管理 (PID={suricata_launcher.process.pid})")
 
-    ids = SemFlowIDS(config)
+    ids = Engine(config)
 
     def shutdown(signum, frame):
         print("\n[STOP] 正在停止...")
@@ -120,6 +121,7 @@ class PcapRunner:
         self.early_flow = None
         self.router = None
         self.llm_analyzer = None
+        self.redis_manager = None
 
     def start(self):
         self.running = True
@@ -141,6 +143,14 @@ class PcapRunner:
         self.llm_analyzer = LLMAnalyzer(
             self.config.redis, self.config.llm
         )
+
+        self.redis_manager = RedisManager(
+            self.config.redis,
+            startup_scan=True,
+            cleanup_on_shutdown=True,
+            flush_flow_keys_on_shutdown=True,  # pcap 模式清理干净
+        )
+        self.redis_manager.start()
 
         # 启动 3 个线程
         threads = [
@@ -267,6 +277,8 @@ class PcapRunner:
             self.router.stop()
         if self.llm_analyzer:
             self.llm_analyzer.stop()
+        if self.redis_manager:
+            self.redis_manager.stop()
         self.logger.info("[STOP] 已停止")
 
 

@@ -79,11 +79,17 @@ class _ColoredFormatter(logging.Formatter):
 
     # 按长度降序排列，确保长模式优先匹配（避免 [LLM] 误匹配 [LLM-OUT] 等子串问题）
     _TAG_COLORS = [
+        ("[REDIS-UNHEALTHY]", _BRIGHT_RED + _BOLD),
         ("[LLM-RESPONSE]", _BRIGHT_CYAN),
+        ("[REDIS-HEALTHY]", _BRIGHT_GREEN),
+        ("[REDIS-CLEANUP]", _YELLOW),
+        ("[REDIS-STATS]", _CYAN),
         ("[0DAY-HUNT]", _BRIGHT_YELLOW + _BOLD),
+        ("[REDIS-STALE]", _YELLOW),
         ("[DUAL-MODEL]", _CYAN),
         ("[SUSPICIOUS]", _YELLOW),
         ("[LLM-OUT]", _BRIGHT_MAGENTA),
+        ("[REDIS-OOM]", _BRIGHT_RED + _BOLD),
         ("[WORKER]", _BLUE),
         ("[READY]", _BRIGHT_GREEN + _BOLD),
         ("[ALERT]", _BRIGHT_RED + _BOLD),
