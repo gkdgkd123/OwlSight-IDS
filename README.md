@@ -10,13 +10,9 @@
 
 **🦉 A Triple-Layer Cooperative Detection Architecture for 0day Threat Hunting**
 
-[English](#english) | [中文](#中文)
-
 </div>
 
 ---
-
-## English
 
 ### Overview
 
@@ -502,8 +498,6 @@ Made with ❤️ for cybersecurity research and education
 </div>
 
 ---
-
-## 中文
 
 ### 项目概述
 
